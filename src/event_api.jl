@@ -519,8 +519,19 @@ function _convert_error(state, error::YAML.ScannerError)
 end
 
 function _convert_error(state, error::YAML.ParserError)
-    return ParserError(error.context, _convert_mark(state, error.context_mark),
-                       error.problem, _convert_mark(state, error.problem_mark), error.note)
+    problem = error.problem
+    problem_mark = error.problem_mark
+    if problem_mark === nothing &&
+       problem !== nothing &&
+       startswith(problem, "expected '<document start>'")
+        token = YAML.peek(state.tokenstream)
+        if token !== nothing
+            problem = "expected '<document start>', but found $(typeof(token))"
+            problem_mark = YAML.firstmark(token)
+        end
+    end
+    return ParserError(error.context, _convert_mark(state, error.context_mark), problem,
+                       _convert_mark(state, problem_mark), error.note)
 end
 
 function _convert_codepoint_error(state::_EventIteratorState, error::Base.CodePointError)
@@ -625,9 +636,9 @@ that need to inspect YAML syntax before aliases, tags, or duplicate mapping keys
 are resolved during construction.
 
 An `IO` input is read when the iterator is created, so seekable and forward-only
-streams are both supported. Invalid encoded byte input raises
-[`EncodingError`](@ref) while the iterator is created. Raw characters forbidden
-by YAML raise [`ScannerError`](@ref) during the same input-validation step.
+streams are both supported. Invalid encoded input raises [`EncodingError`](@ref)
+while the iterator is created. Raw characters forbidden by YAML raise
+[`ScannerError`](@ref) during the same input-validation step.
 Other YAML syntax errors raise [`ScannerError`](@ref) or [`ParserError`](@ref)
 as the iterator advances.
 

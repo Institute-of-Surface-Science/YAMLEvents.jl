@@ -107,6 +107,25 @@ end
     @test quoted_bom_error isa ScannerError
     @test (quoted_bom_error.problem_mark.index, quoted_bom_error.problem_mark.line,
            quoted_bom_error.problem_mark.column) == (9, 1, 9)
+
+    multiline_quoted_bom_error = try
+        parse_events("first: \"a\n\ufeffb\"\n")
+    catch exception
+        exception
+    end
+    @test multiline_quoted_bom_error isa ScannerError
+    @test (multiline_quoted_bom_error.problem_mark.index,
+           multiline_quoted_bom_error.problem_mark.line,
+           multiline_quoted_bom_error.problem_mark.column) == (10, 2, 0)
+
+    mapping_bom_error = try
+        parse_events("a: 1\n\ufeffb: 2\n")
+    catch exception
+        exception
+    end
+    @test mapping_bom_error isa ScannerError
+    @test (mapping_bom_error.problem_mark.index, mapping_bom_error.problem_mark.line,
+           mapping_bom_error.problem_mark.column) == (5, 2, 0)
 end
 
 @testset "Input encodings" begin
@@ -119,6 +138,14 @@ end
                          if event isa ScalarEvent && event.value == "attribute")
         @test (attribute.start_mark.index, attribute.start_mark.line,
                attribute.start_mark.column) == (5, 2, 0)
+    end
+
+    unicode_source = "---\nvalue: 😀\n"
+    for encoding in ("UTF-8", "UTF-16BE", "UTF-16LE", "UTF-32BE", "UTF-32LE")
+        values = [event.value
+                  for event in parse_events(IOBuffer(encode(unicode_source, encoding)))
+                  if event isa ScalarEvent]
+        @test values == ["value", "😀"]
     end
 end
 

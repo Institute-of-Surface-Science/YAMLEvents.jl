@@ -99,8 +99,11 @@ An event's `start_mark` points to the beginning of its syntax and its
 
 ## Errors
 
-Invalid byte input raises `EncodingError` if it cannot be decoded using its
-detected UTF encoding. This happens while `parse_events` buffers an `IO` input.
+Invalid byte input raises `EncodingError` if it cannot be decoded completely
+using its detected UTF encoding. This happens while `parse_events` buffers an
+`IO` input. An `AbstractString` containing malformed UTF-8 also raises
+`EncodingError`.
+
 Decoded input containing characters forbidden by YAML, including raw control
 characters or a misplaced byte-order mark, raises `ScannerError` while the
 iterator is created.

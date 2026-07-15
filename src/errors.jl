@@ -1,4 +1,4 @@
-"""An error raised when byte input is not valid in its detected Unicode encoding."""
+"""An error raised when input is not valid in its detected Unicode encoding."""
 struct EncodingError <: Exception
     encoding::String
     byte_sequence::String
