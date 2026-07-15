@@ -235,6 +235,20 @@
     @test malformed_string_error.encoding == "UTF-8"
     @test malformed_string_error.byte_sequence == "c3"
 
+    oversized_version = "%YAML 999999999999999999999999999999.1\n---\na\n"
+    for (prefix, problem_index) in (("", 6), ("\ufeff", 7))
+        oversized_iterator = YAMLEvents.parse_events(prefix * oversized_version)
+        oversized_error = try
+            collect(oversized_iterator)
+        catch exception
+            exception
+        end
+        @test oversized_error isa YAMLEvents.ScannerError
+        @test occursin("integer that is too large", oversized_error.problem)
+        @test (oversized_error.problem_mark.index, oversized_error.problem_mark.line,
+               oversized_error.problem_mark.column) == (problem_index, 1, problem_index)
+    end
+
     windows_error = try
         collect(YAMLEvents.parse_events("root:\r\n  value: %\r\n"))
     catch exception

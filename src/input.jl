@@ -137,48 +137,6 @@ function _is_yaml_printable(char::Char)
            0x10000 <= codepoint <= 0x10ffff
 end
 
-function _validate_source_characters(source::AbstractString)
-    character_index = UInt64(0)
-    line = UInt64(1)
-    column = UInt64(0)
-    previous_was_carriage_return = false
-    bom_marks = Mark[]
-
-    for char in source
-        mark = Mark(character_index, line, column)
-        if char == '\ufeff'
-            column == 0 || throw(ScannerError(nothing, nothing,
-                               "byte order mark must appear at the beginning of a document",
-                               mark))
-            push!(bom_marks, mark)
-        elseif !_is_yaml_printable(char)
-            throw(ScannerError(nothing, nothing,
-                               "found non-printable character $(_codepoint_name(char))",
-                               mark))
-        end
-
-        character_index += 1
-        if char == '\r'
-            line += 1
-            column = 0
-            previous_was_carriage_return = true
-        elseif char == '\n'
-            previous_was_carriage_return || (line += 1)
-            column = 0
-            previous_was_carriage_return = false
-        elseif char in ('\u0085', '\u2028', '\u2029')
-            line += 1
-            column = 0
-            previous_was_carriage_return = false
-        else
-            column += 1
-            previous_was_carriage_return = false
-        end
-    end
-
-    return bom_marks
-end
-
 function _has_prefix(bytes::Vector{UInt8}, prefix::Tuple{Vararg{UInt8}})
     length(bytes) >= length(prefix) || return false
     return all(index -> bytes[index] == prefix[index], eachindex(prefix))
@@ -240,110 +198,15 @@ function _normalize_newlines(source::AbstractString)
     return String(take!(output)), newline_corrections, character_count
 end
 
-function _tokens_for_bom_validation(source::String)
-    stream = YAML.TokenStream(IOBuffer(source))
-    tokens = Any[]
-    reset_pending = false
-
-    while true
-        token = try
-            Logging.with_logger(Logging.NullLogger()) do
-                YAML.forward!(stream)
-            end
-        catch exception
-            if exception isa Union{YAML.ScannerError, Base.CodePointError}
-                return tokens, false
-            end
-            rethrow()
-        end
-
-        if token === nothing && reset_pending
-            YAML.reset!(stream)
-            reset_pending = false
-        elseif token === nothing
-            return tokens, true
-        else
-            push!(tokens, token)
-            reset_pending = token isa YAML.DocumentEndToken
-        end
-    end
-end
-
 function _throw_misplaced_bom(mark::Mark)
     throw(ScannerError(nothing, nothing,
                        "byte order mark must appear at the beginning of a document", mark))
 end
 
-function _next_bom_validation_token(tokens, index::Int)
-    for next_index in (index + 1):lastindex(tokens)
-        token = tokens[next_index]
-        token isa YAML.StreamStartToken || return token
-    end
-    return nothing
-end
-
-function _validate_bom_placement(source::String, bom_marks::Vector{Mark})
-    isempty(bom_marks) && return nothing
-    # Outside scalar content and comments, the backend exposes each BOM as a token.
-    # Once document syntax has begun, such a token is legal only in the prefix
-    # of an explicit following document (or after a final explicit suffix).
-    tokens, complete = _tokens_for_bom_validation(source)
-    source_marks = Dict((mark.line, mark.column) => mark for mark in bom_marks)
-    tokenized_locations = Set{Tuple{UInt64, UInt64}}()
-    seen_document_syntax = false
-    directives_pending = false
-    after_document_end = false
-
-    for (index, token) in pairs(tokens)
-        if token isa YAML.StreamStartToken
-            continue
-        elseif token isa YAML.ByteOrderMarkToken
-            backend_mark = YAML.firstmark(token)
-            location = (backend_mark.line, backend_mark.column)
-            push!(tokenized_locations, location)
-            source_mark = get(source_marks, location, nothing)
-            source_mark === nothing && continue
-
-            if seen_document_syntax
-                next_token = _next_bom_validation_token(tokens, index)
-                next_token === nothing && !complete && continue
-                starts_document = next_token isa
-                                  Union{YAML.DirectiveToken, YAML.DocumentStartToken}
-                ends_after_suffix = next_token isa YAML.StreamEndToken && after_document_end
-                (directives_pending || !(starts_document || ends_after_suffix)) &&
-                    _throw_misplaced_bom(source_mark)
-            end
-        elseif token isa YAML.StreamEndToken
-            continue
-        else
-            seen_document_syntax = true
-            if token isa YAML.DirectiveToken
-                directives_pending = true
-                after_document_end = false
-            elseif token isa YAML.DocumentEndToken
-                directives_pending = false
-                after_document_end = true
-            else
-                directives_pending = false
-                after_document_end = false
-            end
-        end
-    end
-
-    if complete
-        for mark in bom_marks
-            (mark.line, mark.column) in tokenized_locations || _throw_misplaced_bom(mark)
-        end
-    end
-    return nothing
-end
-
 function _prepare_input(source::AbstractString, encoding::String = "UTF-8")
     _validate_string_encoding(source, encoding)
     string_source = String(source)
-    bom_marks = _validate_source_characters(string_source)
     normalized, newline_corrections, character_count = _normalize_newlines(string_source)
-    _validate_bom_placement(normalized, bom_marks)
     return _PreparedInput(normalized, newline_corrections, character_count, encoding)
 end
 

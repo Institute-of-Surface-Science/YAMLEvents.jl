@@ -99,24 +99,15 @@ end
     @test (second.start_mark.index, second.start_mark.line, second.start_mark.column) ==
           (20, 5, 0)
 
-    quoted_bom_error = try
-        parse_events("first: \"a\ufeffb\"\nnext: value\n")
-    catch exception
-        exception
-    end
-    @test quoted_bom_error isa ScannerError
-    @test (quoted_bom_error.problem_mark.index, quoted_bom_error.problem_mark.line,
-           quoted_bom_error.problem_mark.column) == (9, 1, 9)
+    quoted_bom = only(event
+                      for event in parse_events("%YAML 1.2\n---\nfirst: \"a\ufeffb\"\n")
+                      if event isa ScalarEvent && event.value != "first")
+    @test quoted_bom.value == "a\ufeffb"
 
-    multiline_quoted_bom_error = try
-        parse_events("first: \"a\n\ufeffb\"\n")
-    catch exception
-        exception
-    end
-    @test multiline_quoted_bom_error isa ScannerError
-    @test (multiline_quoted_bom_error.problem_mark.index,
-           multiline_quoted_bom_error.problem_mark.line,
-           multiline_quoted_bom_error.problem_mark.column) == (10, 2, 0)
+    multiline_quoted_bom = only(event
+                                for event in parse_events("first: \"a\n\ufeffb\"\n")
+                                if event isa ScalarEvent && event.value != "first")
+    @test multiline_quoted_bom.value == "a\n\ufeffb"
 
     mapping_bom_error = try
         parse_events("a: 1\n\ufeffb: 2\n")
@@ -161,6 +152,20 @@ end
         @test error.problem_mark.index == 8
         @test occursin("U+", error.problem)
     end
+
+    for codepoint in (0x7f, 0x80, 0x9f, 0xfeff, 0xfffe, 0xffff)
+        value = "a" * string(Char(codepoint)) * "b"
+        quoted = only(event
+                      for event in parse_events("%YAML 1.2\n---\nvalue: \"$value\"\n")
+                      if event isa ScalarEvent && event.value != "value")
+        @test quoted.value == value
+    end
+
+    single_quoted_c1 = only(event
+                            for event in parse_events("value: 'a\u0080b'\n")
+                            if event isa ScalarEvent && event.value != "value")
+    @test single_quoted_c1.value == "a\u0080b"
+    @test_throws ScannerError parse_events("value: \"a\u0001b\"\n")
 
     crlf_error = try
         parse_events("root:\r\n" * string(Char(0x01)))
@@ -265,6 +270,9 @@ end
     @test plain_input.source === plain_source
     @test isempty(plain_input.newline_corrections)
     @test plain_input.character_count == length(plain_source)
+
+    leading_bom_input = YAMLEvents._prepare_input("\ufeff" * plain_source)
+    @test isempty(YAMLEvents._context_characters(leading_bom_input))
 
     windows_input = YAMLEvents._prepare_input("a\r\nb\r\n")
     @test windows_input.source == "a\nb\n"
