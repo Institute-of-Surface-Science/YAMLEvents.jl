@@ -87,6 +87,24 @@ end
                          if event isa ScalarEvent && event.value == "attribute")
     @test (bom_attribute.start_mark.index, bom_attribute.start_mark.line,
            bom_attribute.start_mark.column) == (6, 2, 0)
+
+    multi_bom_source = "\ufeff---\nfirst\n...\n\ufeff---\nsecond\n"
+    multi_bom_events = collect(parse_events(multi_bom_source))
+    document_starts = filter(event -> event isa DocumentStartEvent, multi_bom_events)
+    @test [(event.start_mark.index, event.start_mark.line, event.start_mark.column)
+           for event in document_starts] == [(1, 1, 1), (16, 4, 1)]
+    second = only(event
+                  for event in multi_bom_events
+                  if event isa ScalarEvent && event.value == "second")
+    @test (second.start_mark.index, second.start_mark.line, second.start_mark.column) ==
+          (20, 5, 0)
+
+    quoted_bom_events = collect(parse_events("first: \"a\ufeffb\"\nnext: value\n"))
+    next_scalar = only(event
+                       for event in quoted_bom_events
+                       if event isa ScalarEvent && event.value == "next")
+    @test (next_scalar.start_mark.index, next_scalar.start_mark.line,
+           next_scalar.start_mark.column) == (13, 2, 0)
 end
 
 @testset "Input encodings" begin
@@ -126,4 +144,17 @@ end
         @test (value.end_mark.index, value.end_mark.line, value.end_mark.column) ==
               (start_index + 4, 2, 13)
     end
+end
+
+@testset "Sparse source index mapping" begin
+    plain_source = repeat("key: value\n", 10_000)
+    plain_input = YAMLEvents._prepare_input(plain_source)
+    @test plain_input.source === plain_source
+    @test isempty(plain_input.newline_corrections)
+    @test plain_input.character_count == length(plain_source)
+
+    windows_input = YAMLEvents._prepare_input("a\r\nb\r\n")
+    @test windows_input.source == "a\nb\n"
+    @test windows_input.newline_corrections == UInt64[2, 4]
+    @test windows_input.character_count == 4
 end

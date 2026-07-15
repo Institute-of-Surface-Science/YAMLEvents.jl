@@ -1,6 +1,7 @@
 struct _PreparedInput
     source::String
-    index_map::Vector{UInt64}
+    newline_corrections::Vector{UInt64}
+    character_count::UInt64
     encoding::String
 end
 
@@ -33,39 +34,54 @@ function _detect_encoding(bytes::Vector{UInt8})
 end
 
 function _normalize_newlines(source::AbstractString)
-    input = collect(source)
-    output = Char[]
-    index_map = UInt64[0]
-    original_index = UInt64(0)
-    index = 1
-
-    while index <= length(input)
-        char = input[index]
-        if char == '\r'
-            push!(output, '\n')
-            if index < length(input) && input[index + 1] == '\n'
-                index += 1
-                original_index += 1
-            end
-        else
-            push!(output, char)
-        end
-        original_index += 1
-        push!(index_map, original_index)
-        index += 1
+    if !occursin('\r', source)
+        normalized = String(source)
+        return normalized, UInt64[], UInt64(length(normalized))
     end
 
-    return String(output), index_map
+    output = IOBuffer()
+    newline_corrections = UInt64[]
+    character_count = UInt64(0)
+    index = firstindex(source)
+
+    while index <= ncodeunits(source)
+        char = source[index]
+        next_index = nextind(source, index)
+        if char == '\r'
+            write(output, '\n')
+            character_count += 1
+            if next_index <= ncodeunits(source) && source[next_index] == '\n'
+                push!(newline_corrections, character_count)
+                index = nextind(source, next_index)
+            else
+                index = next_index
+            end
+        else
+            write(output, char)
+            character_count += 1
+            index = next_index
+        end
+    end
+
+    return String(take!(output)), newline_corrections, character_count
 end
 
 function _prepare_input(source::AbstractString, encoding::String = "UTF-8")
-    normalized, index_map = _normalize_newlines(source)
-    return _PreparedInput(normalized, index_map, encoding)
+    normalized, newline_corrections, character_count = _normalize_newlines(source)
+    return _PreparedInput(normalized, newline_corrections, character_count, encoding)
 end
 
 function _prepare_input(input::IO)
     bytes = read(input)
     encoding = _detect_encoding(bytes)
-    source = StringEncodings.decode(bytes, encoding)
+    source = try
+        StringEncodings.decode(bytes, encoding)
+    catch exception
+        if exception isa StringEncodings.InvalidSequenceError
+            byte_sequence = isempty(exception.args) ? "" : string(first(exception.args))
+            throw(EncodingError(encoding, byte_sequence))
+        end
+        rethrow()
+    end
     return _prepare_input(source, encoding)
 end

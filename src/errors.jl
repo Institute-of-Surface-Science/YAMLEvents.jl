@@ -1,3 +1,9 @@
+"""An error raised when byte input is not valid in its detected Unicode encoding."""
+struct EncodingError <: Exception
+    encoding::String
+    byte_sequence::String
+end
+
 """An error raised when YAML input cannot be tokenized."""
 struct ScannerError <: Exception
     context::Union{String, Nothing}
@@ -13,6 +19,11 @@ struct ParserError <: Exception
     problem::Union{String, Nothing}
     problem_mark::Union{Mark, Nothing}
     note::Union{String, Nothing}
+end
+
+function Base.showerror(io::IO, error::EncodingError)
+    print(io, "invalid ", error.encoding, " byte sequence")
+    isempty(error.byte_sequence) || print(io, " 0x", error.byte_sequence)
 end
 
 function Base.showerror(io::IO, error::Union{ScannerError, ParserError})

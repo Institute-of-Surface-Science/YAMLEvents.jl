@@ -7,6 +7,7 @@ collection styles, tags, anchors, and aliases.
 """
 module YAMLEvents
 
+import Logging
 import StringEncodings
 import YAML
 
@@ -18,7 +19,7 @@ export DocumentStartEvent, DocumentEndEvent
 export AliasEvent, ScalarEvent
 export SequenceStartEvent, SequenceEndEvent
 export MappingStartEvent, MappingEndEvent
-export ScannerError, ParserError
+export EncodingError, ScannerError, ParserError
 
 include("mark.jl")
 include("events.jl")

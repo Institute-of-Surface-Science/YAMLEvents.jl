@@ -1,14 +1,16 @@
 name = "YAMLEvents"
 uuid = "79a9720a-54b1-42a2-b4b9-5c4b76fbe7a5"
-authors = ["Institute of Surface Science"]
+authors = ["Sven Berger"]
 version = "0.1.0"
 
 [deps]
+Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
 StringEncodings = "69024149-9ee7-55f6-a4c4-859efe599b68"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
 [compat]
 Aqua = "0.8"
+Logging = "1.10"
 StringEncodings = "0.3"
 Test = "1.10"
 YAML = "=0.4.16"

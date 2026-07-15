@@ -14,6 +14,7 @@
     @test eltype(iterator) === YAMLEvents.Event
     @test parentmodule(YAMLEvents.Event) === YAMLEvents
     @test parentmodule(YAMLEvents.Mark) === YAMLEvents
+    @test parentmodule(YAMLEvents.EncodingError) === YAMLEvents
     @test parentmodule(YAMLEvents.ScannerError) === YAMLEvents
 
     events = collect(iterator)
@@ -147,6 +148,16 @@
     @test parser_error.problem_mark.line == 1
     @test parser_error.problem_mark.column == 3
 
+    encoding_error = try
+        YAMLEvents.parse_events(IOBuffer(UInt8[0xff]))
+    catch exception
+        exception
+    end
+    @test encoding_error isa YAMLEvents.EncodingError
+    @test encoding_error.encoding == "UTF-8"
+    @test encoding_error.byte_sequence == "ff"
+    @test occursin("invalid UTF-8 byte sequence 0xff", sprint(showerror, encoding_error))
+
     windows_error = try
         collect(YAMLEvents.parse_events("root:\r\n  value: %\r\n"))
     catch exception
@@ -156,6 +167,16 @@
     @test windows_error.problem_mark.index == 16
     @test windows_error.problem_mark.line == 2
     @test windows_error.problem_mark.column == 9
+
+    bom_error = try
+        collect(YAMLEvents.parse_events("\ufeffvalue: %"))
+    catch exception
+        exception
+    end
+    @test bom_error isa YAMLEvents.ScannerError
+    @test bom_error.problem_mark.index == 8
+    @test bom_error.problem_mark.line == 1
+    @test bom_error.problem_mark.column == 8
 
     warning_source = "%FOO bar\n--- value"
     @test_logs (:warn, r"unknown directive name: \"FOO\"") begin

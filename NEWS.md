@@ -8,6 +8,6 @@ Initial release.
 - Preserve document boundaries, scalar styles, collection styles, tags,
   anchors, aliases, duplicate keys, and source marks.
 - Accept strings and seekable or non-seekable `IO` inputs.
-- Report scanner and parser failures with source-aware error types.
+- Report encoding, scanner, and parser failures with package-owned error types.
 - Support UTF-8, UTF-16, and UTF-32 input.
 - Use the registered YAML.jl v0.4.16 release as the parser backend.

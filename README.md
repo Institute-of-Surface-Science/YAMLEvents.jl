@@ -99,15 +99,18 @@ An event's `start_mark` points to the beginning of its syntax and its
 
 ## Errors
 
-Malformed input raises `ScannerError` when the text cannot be tokenized or
-`ParserError` when valid tokens cannot form a YAML document. Because parsing is
-lazy, either exception can be raised while iterating:
+Invalid byte input raises `EncodingError` if it cannot be decoded using its
+detected UTF encoding. This happens while `parse_events` buffers an `IO` input.
+
+Malformed YAML raises `ScannerError` when decoded text cannot be tokenized or
+`ParserError` when valid tokens cannot form a YAML document. YAML parsing is
+lazy, so either syntax exception can be raised while iterating:
 
 ```julia
 try
     collect(parse_events("[first,,second]"))
 catch error
-    if error isa ScannerError || error isa ParserError
+    if error isa EncodingError || error isa ScannerError || error isa ParserError
         @warn "Invalid YAML" exception=error
     else
         rethrow()
