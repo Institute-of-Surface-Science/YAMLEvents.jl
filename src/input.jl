@@ -3,7 +3,10 @@ struct _PreparedInput
     newline_corrections::Vector{UInt64}
     character_count::UInt64
     encoding::String
+    character_restorations::Dict{Char, Char}
 end
+
+const _YAML_1_1_LINE_BREAKS = ('\u0085', '\u2028', '\u2029')
 
 function _codepoint_name(char::Char)
     codepoint = UInt32(char)
@@ -198,6 +201,41 @@ function _normalize_newlines(source::AbstractString)
     return String(take!(output)), newline_corrections, character_count
 end
 
+function _shield_yaml_1_2_characters(source::String)
+    any(char -> char in _YAML_1_1_LINE_BREAKS, source) ||
+        return source, Dict{Char, Char}()
+
+    present = Set(source)
+    shields = Dict{Char, Char}()
+    restorations = Dict{Char, Char}()
+    candidate = UInt32(0xa0)
+    for character in _YAML_1_1_LINE_BREAKS
+        while candidate <= 0x10ffff
+            if !(0xd800 <= candidate <= 0xdfff)
+                shield = Char(candidate)
+                if _is_yaml_printable(shield) &&
+                   shield != '\ufeff' &&
+                   !(shield in _YAML_1_1_LINE_BREAKS) &&
+                   !(shield in present)
+                    shields[character] = shield
+                    restorations[shield] = character
+                    candidate += 1
+                    break
+                end
+            end
+            candidate += 1
+        end
+    end
+    length(shields) == length(_YAML_1_1_LINE_BREAKS) ||
+        error("could not reserve YAML 1.2 compatibility characters")
+
+    output = IOBuffer()
+    for character in source
+        write(output, get(shields, character, character))
+    end
+    return String(take!(output)), restorations
+end
+
 function _throw_misplaced_bom(mark::Mark)
     throw(ScannerError(nothing, nothing,
                        "byte order mark must appear at the beginning of a document", mark))
@@ -207,7 +245,9 @@ function _prepare_input(source::AbstractString, encoding::String = "UTF-8")
     _validate_string_encoding(source, encoding)
     string_source = String(source)
     normalized, newline_corrections, character_count = _normalize_newlines(string_source)
-    return _PreparedInput(normalized, newline_corrections, character_count, encoding)
+    shielded, character_restorations = _shield_yaml_1_2_characters(normalized)
+    return _PreparedInput(shielded, newline_corrections, character_count, encoding,
+                          character_restorations)
 end
 
 function _prepare_input(input::IO)
