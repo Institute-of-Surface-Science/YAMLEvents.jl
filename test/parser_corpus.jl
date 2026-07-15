@@ -133,6 +133,62 @@ end
     @test value.end_mark.index == 19
 end
 
+@testset "Scanner source mark corrections" begin
+    quoted_cases = (("first: \"can't\"\nnext: value\n", 14, 15),
+                    ("first: \"a\\nb\"\nnext: value\n", 13, 14),
+                    ("first: \"a\\u0041b\"\nnext: value\n", 17, 18),
+                    ("first: 'a\\b'\nnext: value\n", 12, 13),
+                    ("first: \"a\n    b\"\nnext: value\n", 16, 17),
+                    ("first: \"a\\\n    b\"\nnext: value\n", 17, 18))
+    for (source, quoted_end, next_start) in quoted_cases
+        events = collect(parse_events(source))
+        quoted = only(event
+                      for event in events
+                      if event isa ScalarEvent && event.start_mark.index == 7)
+        next_scalar = only(event
+                           for event in events
+                           if event isa ScalarEvent && event.value == "next")
+        @test quoted.end_mark.index == quoted_end
+        @test next_scalar.start_mark.index == next_start
+        @test next_scalar.start_mark.column == 0
+    end
+
+    flow_source = "{first: \"can't\", next: value}"
+    flow_next = only(event
+                     for event in parse_events(flow_source)
+                     if event isa ScalarEvent && event.value == "next")
+    @test (flow_next.start_mark.index, flow_next.start_mark.line,
+           flow_next.start_mark.column) == (17, 1, 17)
+
+    tag_source = "first: !foo%20bar value\nnext: value\n"
+    tag_events = collect(parse_events(tag_source))
+    tagged_value = only(event
+                        for event in tag_events
+                        if event isa ScalarEvent &&
+                               event.value == "value" &&
+                               event.start_mark.line == 1)
+    tag_next = only(event
+                    for event in tag_events
+                    if event isa ScalarEvent && event.value == "next")
+    @test (tagged_value.start_mark.index, tagged_value.end_mark.index) == (7, 23)
+    @test (tag_next.start_mark.index, tag_next.start_mark.column) == (24, 0)
+
+    directive_source = "%TAG !e! tag:example.com,2026:%20\n---\n" *
+                       "first: !e!value data\nnext: value\n"
+    directive_next = only(event
+                          for event in parse_events(directive_source)
+                          if event isa ScalarEvent && event.value == "next")
+    @test (directive_next.start_mark.index, directive_next.start_mark.line,
+           directive_next.start_mark.column) == (59, 4, 0)
+
+    combined_source = "\ufefffirst: \"can't\"\n...\n\ufeff---\nnext: value\n"
+    combined_next = only(event
+                         for event in parse_events(combined_source)
+                         if event isa ScalarEvent && event.value == "next")
+    @test (combined_next.start_mark.index, combined_next.start_mark.line,
+           combined_next.start_mark.column) == (25, 4, 0)
+end
+
 @testset "Line break source marks" begin
     for (line_break, start_index) in (("\n", 15), ("\r", 15), ("\r\n", 16))
         source = "root:" * line_break * "  value: data" * line_break

@@ -134,3 +134,5 @@ package-owned event, mark, and error types; no custom YAML.jl fork is required.
 ## License
 
 YAMLEvents.jl is available under the [MIT License](LICENSE).
+Third-party test fixture provenance and license notices are recorded in
+[THIRD_PARTY_NOTICE.md](THIRD_PARTY_NOTICE.md).

@@ -178,6 +178,26 @@
     @test bom_error.problem_mark.line == 1
     @test bom_error.problem_mark.column == 8
 
+    escape_error = try
+        collect(YAMLEvents.parse_events("value: \"a\\q\""))
+    catch exception
+        exception
+    end
+    @test escape_error isa YAMLEvents.ScannerError
+    @test escape_error.problem_mark.index == 10
+    @test escape_error.problem_mark.line == 1
+    @test escape_error.problem_mark.column == 10
+
+    windows_escape_error = try
+        collect(YAMLEvents.parse_events("root:\r\n  value: \"a\\q\""))
+    catch exception
+        exception
+    end
+    @test windows_escape_error isa YAMLEvents.ScannerError
+    @test windows_escape_error.problem_mark.index == 19
+    @test windows_escape_error.problem_mark.line == 2
+    @test windows_escape_error.problem_mark.column == 12
+
     warning_source = "%FOO bar\n--- value"
     @test_logs (:warn, r"unknown directive name: \"FOO\"") begin
         collect(YAMLEvents.parse_events(warning_source))
