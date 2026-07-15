@@ -2,49 +2,132 @@
 
 [![CI](https://github.com/Institute-of-Surface-Science/YAMLEvents.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/Institute-of-Surface-Science/YAMLEvents.jl/actions/workflows/CI.yml)
 
-YAMLEvents.jl parses YAML input into a forward-only stream of syntactic events
-without constructing Julia values. It preserves the syntax information needed
-by validators, linters, configuration tools, and source-aware diagnostics:
+Inspect YAML syntax as a lazy stream of parser events, without constructing
+dictionaries, arrays, or resolved scalar values.
 
-- document boundaries;
-- scalar text and style;
-- block and flow collection style;
+Most YAML readers immediately turn a document into dictionaries, arrays, and
+scalar values. YAMLEvents.jl stops at the parser-event layer instead, preserving
+information that is otherwise lost during construction:
+
+- document boundaries and directives;
+- scalar text and quoting style;
+- block and flow collection styles;
 - explicit tags, anchors, and aliases;
-- source marks for every event.
+- duplicate mapping keys;
+- source locations for every event.
 
-The parser frontend is derived from
-[YAML.jl](https://github.com/JuliaData/YAML.jl). YAMLEvents.jl owns its event
-types and does not modify or depend on the YAML.jl namespace.
+This makes the package useful for validators, linters, format-aware tooling,
+configuration checks, and source-aware diagnostics.
 
-## Usage
+## Installation
+
+YAMLEvents.jl requires Julia 1.10 or later. Install it directly from GitHub:
+
+```julia
+import Pkg
+Pkg.add(url="https://github.com/Institute-of-Surface-Science/YAMLEvents.jl")
+```
+
+## Quick start
 
 ```julia
 using YAMLEvents
 
 events = collect(parse_events("material: {D0_m2_s: 1.0e-7}"))
 
-for event in events
-    if event isa ScalarEvent
-        println(event.value, " at ", event.start_mark)
+scalars = [event.value for event in events if event isa ScalarEvent]
+# ["material", "D0_m2_s", "1.0e-7"]
+
+mappings = [event for event in events if event isa MappingStartEvent]
+mappings[1].flow_style # false: `material: ...` is a block mapping
+mappings[2].flow_style # true:  `{...}` is a flow mapping
+```
+
+The value `1.0e-7` remains scalar text. YAMLEvents.jl reports how the document
+was written; it does not decide which Julia type that text represents.
+
+`parse_events(input)` accepts an `AbstractString` or an `IO` and returns a
+`YAMLEventIterator`. Events are produced lazily as the iterator advances, so
+callers do not need to collect the complete event stream:
+
+```julia
+open("configuration.yaml") do io
+    for event in parse_events(io)
+        event isa ScalarEvent || continue
+        println(event.value, " at line ", event.start_mark.line)
     end
 end
 ```
 
-`parse_events` accepts an `AbstractString` or `IO`. The returned iterator is
-forward-only and may be consumed once. Malformed input throws `ScannerError` or
-`ParserError`.
+An `IO` input is buffered when `parse_events` is called. This allows pipes and
+other non-seekable streams to be used and means the input may be closed before
+iteration starts. Each event iterator is forward-only and may be consumed once.
+
+## Event model
+
+Every event is a subtype of `Event` and has `start_mark` and `end_mark` fields.
+The remaining fields depend on the event type:
+
+| Event | Additional fields |
+| --- | --- |
+| `StreamStartEvent` | `encoding` |
+| `StreamEndEvent` | — |
+| `DocumentStartEvent` | `explicit`, `version`, `tags` |
+| `DocumentEndEvent` | `explicit` |
+| `ScalarEvent` | `anchor`, `tag`, `implicit`, `value`, `style` |
+| `AliasEvent` | `anchor` |
+| `SequenceStartEvent` | `anchor`, `tag`, `implicit`, `flow_style` |
+| `SequenceEndEvent` | — |
+| `MappingStartEvent` | `anchor`, `tag`, `implicit`, `flow_style` |
+| `MappingEndEvent` | — |
+
+For scalar events, `style` is `nothing` for plain text or one of `'\''`, `'"'`,
+`'|'`, and `'>'` for single-quoted, double-quoted, literal, and folded scalars.
+For collection start events, `flow_style` distinguishes `[a, b]` and `{a: b}`
+from block-style collections.
+
+### Source marks
+
+A `Mark` describes a position between characters in the input:
+
+- `line` is one-based;
+- `column` is a zero-based character offset within the line;
+- `index` is a zero-based character offset within the complete stream.
+
+An event's `start_mark` points to the beginning of its syntax and its
+`end_mark` normally points immediately after it.
+
+## Errors
+
+Malformed input raises `ScannerError` when the text cannot be tokenized or
+`ParserError` when valid tokens cannot form a YAML document. Because parsing is
+lazy, either exception can be raised while iterating:
+
+```julia
+try
+    collect(parse_events("[first,,second]"))
+catch error
+    if error isa ScannerError || error isa ParserError
+        @warn "Invalid YAML" exception=error
+    else
+        rethrow()
+    end
+end
+```
 
 ## Scope
 
-YAMLEvents.jl reports YAML syntax. It deliberately does not resolve scalar
-types, expand aliases, apply merge keys, or construct dictionaries and arrays.
-Use a YAML construction package after syntax validation when Julia values are
-required.
+YAMLEvents.jl deliberately does not:
 
-## Provenance
+- resolve scalar types such as booleans, numbers, or dates;
+- expand aliases or apply merge keys;
+- construct dictionaries, arrays, or custom Julia objects.
 
-The scanner and parser frontend was extracted from the Institute of Surface
-Science YAML.jl fork at
-[`232fe77`](https://github.com/Institute-of-Surface-Science/YAML.jl/commit/232fe771bbe19d34a9d55ccda53f3e6143624808).
-See
-[`THIRD_PARTY_NOTICE.md`](THIRD_PARTY_NOTICE.md) for attribution and licensing.
+Use [YAML.jl](https://github.com/JuliaData/YAML.jl) or another construction
+package when Julia values are required. YAMLEvents.jl uses the registered
+YAML.jl v0.4.16 release as its parser backend and converts its output into
+package-owned event, mark, and error types; no custom YAML.jl fork is required.
+
+## License
+
+YAMLEvents.jl is available under the [MIT License](LICENSE).

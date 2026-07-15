@@ -7,9 +7,8 @@ collection styles, tags, anchors, and aliases.
 """
 module YAMLEvents
 
-import Base: isempty, iterate, length, peek, show
-using Printf: @printf
-using StringEncodings: Encoding, StringDecoder, @enc_str
+import StringEncodings
+import YAML
 
 export parse_events
 export YAMLEventIterator
@@ -21,15 +20,10 @@ export SequenceStartEvent, SequenceEndEvent
 export MappingStartEvent, MappingEndEvent
 export ScannerError, ParserError
 
-include("versions.jl")
-include("queue.jl")
-include("buffered_input.jl")
 include("mark.jl")
-include("span.jl")
-include("tokens.jl")
-include("scanner.jl")
 include("events.jl")
-include("parser.jl")
+include("errors.jl")
+include("input.jl")
 include("event_api.jl")
 
 end # module YAMLEvents

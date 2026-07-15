@@ -12,6 +12,9 @@
     iterator = YAMLEvents.parse_events(source)
     @test Base.IteratorSize(typeof(iterator)) isa Base.SizeUnknown
     @test eltype(iterator) === YAMLEvents.Event
+    @test parentmodule(YAMLEvents.Event) === YAMLEvents
+    @test parentmodule(YAMLEvents.Mark) === YAMLEvents
+    @test parentmodule(YAMLEvents.ScannerError) === YAMLEvents
 
     events = collect(iterator)
     @test first(events) isa YAMLEvents.StreamStartEvent
@@ -65,6 +68,14 @@
     io_events = collect(YAMLEvents.parse_events(IOBuffer(source)))
     @test typeof.(io_events) == typeof.(events)
 
+    stream = Base.BufferStream()
+    write(stream, source)
+    closewrite(stream)
+    stream_events = collect(YAMLEvents.parse_events(stream))
+    close(stream)
+    @test [event.value for event in stream_events if event isa YAMLEvents.ScalarEvent] ==
+          [event.value for event in events if event isa YAMLEvents.ScalarEvent]
+
     multi_document_source = "---\nfirst\n...\n---\nsecond\n...\n"
     multi_document_events = collect(YAMLEvents.parse_events(multi_document_source))
     @test count(event -> event isa YAMLEvents.StreamStartEvent, multi_document_events) == 1
@@ -115,6 +126,36 @@
 
     @test_throws YAMLEvents.ParserError collect(YAMLEvents.parse_events("[1,,2]"))
     @test_throws YAMLEvents.ScannerError collect(YAMLEvents.parse_events("value: %"))
+
+    scanner_error = try
+        collect(YAMLEvents.parse_events("value: %"))
+    catch exception
+        exception
+    end
+    @test scanner_error isa YAMLEvents.ScannerError
+    @test scanner_error.problem_mark.index == 7
+    @test scanner_error.problem_mark.line == 1
+    @test scanner_error.problem_mark.column == 7
+
+    parser_error = try
+        collect(YAMLEvents.parse_events("[1,,2]"))
+    catch exception
+        exception
+    end
+    @test parser_error isa YAMLEvents.ParserError
+    @test parser_error.problem_mark.index == 3
+    @test parser_error.problem_mark.line == 1
+    @test parser_error.problem_mark.column == 3
+
+    windows_error = try
+        collect(YAMLEvents.parse_events("root:\r\n  value: %\r\n"))
+    catch exception
+        exception
+    end
+    @test windows_error isa YAMLEvents.ScannerError
+    @test windows_error.problem_mark.index == 16
+    @test windows_error.problem_mark.line == 2
+    @test windows_error.problem_mark.column == 9
 
     warning_source = "%FOO bar\n--- value"
     @test_logs (:warn, r"unknown directive name: \"FOO\"") begin
