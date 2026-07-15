@@ -1,0 +1,19 @@
+{
+    "title": "YAMLEvents.jl",
+    "description": "A Julia package for parsing YAML input into a forward-only stream of syntax-preserving events.",
+    "creators": [
+        {
+            "affiliation": "Institute of Surface Science, Helmholtz-Zentrum hereon, Germany",
+            "name": "Berger, Sven",
+            "orcid": "0000-0001-6083-7038"
+        }
+    ],
+    "license": "mit",
+    "upload_type": "software",
+    "keywords": [
+        "Julia",
+        "YAML",
+        "parser",
+        "events"
+    ]
+}
