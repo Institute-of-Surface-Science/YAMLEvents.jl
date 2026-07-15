@@ -4,7 +4,7 @@
 
 Initial release.
 
-- Parse YAML into a forward-only stream of syntactic events.
+- Parse YAML 1.1 into a forward-only stream of syntactic events.
 - Preserve document boundaries, scalar styles, collection styles, tags,
   anchors, aliases, duplicate keys, and source marks.
 - Accept strings and seekable or non-seekable `IO` inputs.

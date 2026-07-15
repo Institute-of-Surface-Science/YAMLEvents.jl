@@ -100,7 +100,7 @@ end
           (20, 5, 0)
 
     quoted_bom = only(event
-                      for event in parse_events("%YAML 1.2\n---\nfirst: \"a\ufeffb\"\n")
+                      for event in parse_events("%YAML 1.1\n---\nfirst: \"a\ufeffb\"\n")
                       if event isa ScalarEvent && event.value != "first")
     @test quoted_bom.value == "a\ufeffb"
 
@@ -156,7 +156,7 @@ end
     for codepoint in (0x7f, 0x80, 0x9f, 0xfeff, 0xfffe, 0xffff)
         value = "a" * string(Char(codepoint)) * "b"
         quoted = only(event
-                      for event in parse_events("%YAML 1.2\n---\nvalue: \"$value\"\n")
+                      for event in parse_events("%YAML 1.1\n---\nvalue: \"$value\"\n")
                       if event isa ScalarEvent && event.value != "value")
         @test quoted.value == value
     end
@@ -166,6 +166,11 @@ end
                             if event isa ScalarEvent && event.value != "value")
     @test single_quoted_c1.value == "a\u0080b"
     @test_throws ScannerError parse_events("value: \"a\u0001b\"\n")
+    invalid_context_sources = ("value: &a\u0080b data\n", "value: !a\u0080b data\n",
+                               "value: &a\ufeffb data\n", "value: !a\ufeffb data\n")
+    for source in invalid_context_sources
+        @test_throws ScannerError parse_events(source)
+    end
 
     crlf_error = try
         parse_events("root:\r\n" * string(Char(0x01)))

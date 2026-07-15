@@ -25,7 +25,6 @@ mutable struct _EventIteratorState
     stream::YAML.EventStream
     mark_converter::_MarkConverter
     encoding::String
-    character_restorations::Dict{Char, Char}
     previous_event::Union{Event, Nothing}
     done::Bool
 end
@@ -74,7 +73,7 @@ function _source_index!(converter::_MarkConverter, target_position::UInt64)
     return converter.source_cursor
 end
 
-_is_line_break(char::Char) = char == '\n'
+_is_line_break(char::Char) = char in ('\n', '\u0085', '\u2028', '\u2029')
 _is_inline_space(char::Char) = char == ' ' || char == '\t'
 
 function _line_start_positions(source::String)
@@ -378,10 +377,14 @@ function _validate_pending_bom(pending, token)
 end
 
 function _validate_scanner_failure(characters::Vector{_ContextCharacter},
-                                   positions::Vector{UInt64},
-                                   converter::_MarkConverter,
+                                   positions::Vector{UInt64}, converter::_MarkConverter,
                                    exception::YAML.ScannerError)
-    failure_position = _normalized_index(converter, exception.problem_mark.index)
+    failure_position = try
+        _normalized_index(converter, exception.problem_mark.index)
+    catch conversion_error
+        conversion_error isa ErrorException || rethrow()
+        return nothing
+    end
     character_index = searchsortedfirst(positions, failure_position)
     if character_index <= length(characters) &&
        positions[character_index] == failure_position
@@ -606,20 +609,6 @@ function _marks(state, event)
     return _convert_mark(state, event.start_mark), _convert_mark(state, event.end_mark)
 end
 
-_restore_characters(::_EventIteratorState, ::Nothing) = nothing
-
-function _restore_characters(state::_EventIteratorState, text::String)
-    restorations = state.character_restorations
-    isempty(restorations) && return text
-    any(character -> haskey(restorations, character), text) || return text
-
-    output = IOBuffer()
-    for character in text
-        write(output, get(restorations, character, character))
-    end
-    return String(take!(output))
-end
-
 _decode_backend_tag(::Nothing, ::Mark) = nothing
 
 function _decode_backend_tag(tag::String, problem_mark::Mark)
@@ -657,16 +646,15 @@ _convert_event(state, event::YAML.StreamEndEvent) = StreamEndEvent(_marks(state,
 
 function _convert_event(state, event::YAML.DocumentStartEvent)
     marks = _marks(state, event)
-    if event.version !== nothing && event.version != (1, 2)
+    if event.version !== nothing && event.version > (1, 1)
         throw(ParserError(nothing, nothing,
-                          "found incompatible YAML document (version 1.2 is required)",
+                          "found incompatible YAML document (version 1.1 or earlier is required)",
                           marks[1], nothing))
     end
     tags = if event.tags === nothing
         nothing
     else
-        Dict(_restore_characters(state, handle) =>
-             _restore_characters(state, _decode_backend_tag(prefix, marks[1]))
+        Dict(handle => _decode_backend_tag(prefix, marks[1])
              for (handle, prefix) in event.tags)
     end
     return DocumentStartEvent(marks..., event.explicit, event.version, tags)
@@ -677,24 +665,21 @@ function _convert_event(state, event::YAML.DocumentEndEvent)
 end
 
 function _convert_event(state, event::YAML.AliasEvent)
-    return AliasEvent(_marks(state, event)..., _restore_characters(state, event.anchor))
+    return AliasEvent(_marks(state, event)..., event.anchor)
 end
 
 function _convert_event(state, event::YAML.ScalarEvent)
     marks = _marks(state, event)
     _throw_scalar_error(state, event, marks[1])
     implicit = (Bool(event.implicit[1]), Bool(event.implicit[2]))
-    anchor = _restore_characters(state, event.anchor)
-    tag = _restore_characters(state, _decode_backend_tag(event.tag, marks[1]))
-    value = _restore_characters(state, event.value)
-    return ScalarEvent(marks..., anchor, tag, implicit, value, event.style)
+    tag = _decode_backend_tag(event.tag, marks[1])
+    return ScalarEvent(marks..., event.anchor, tag, implicit, event.value, event.style)
 end
 
 function _convert_event(state, event::YAML.SequenceStartEvent)
     marks = _marks(state, event)
-    anchor = _restore_characters(state, event.anchor)
-    tag = _restore_characters(state, _decode_backend_tag(event.tag, marks[1]))
-    return SequenceStartEvent(marks..., anchor, tag, event.implicit, event.flow_style)
+    tag = _decode_backend_tag(event.tag, marks[1])
+    return SequenceStartEvent(marks..., event.anchor, tag, event.implicit, event.flow_style)
 end
 
 function _convert_event(state, event::YAML.SequenceEndEvent)
@@ -703,9 +688,8 @@ end
 
 function _convert_event(state, event::YAML.MappingStartEvent)
     marks = _marks(state, event)
-    anchor = _restore_characters(state, event.anchor)
-    tag = _restore_characters(state, _decode_backend_tag(event.tag, marks[1]))
-    return MappingStartEvent(marks..., anchor, tag, event.implicit, event.flow_style)
+    tag = _decode_backend_tag(event.tag, marks[1])
+    return MappingStartEvent(marks..., event.anchor, tag, event.implicit, event.flow_style)
 end
 
 function _convert_event(state, event::YAML.MappingEndEvent)
@@ -713,10 +697,8 @@ function _convert_event(state, event::YAML.MappingEndEvent)
 end
 
 function _convert_error(state, error::YAML.ScannerError)
-    return ScannerError(_restore_characters(state, error.context),
-                        _convert_mark(state, error.context_mark),
-                        _restore_characters(state, error.problem),
-                        _convert_mark(state, error.problem_mark))
+    return ScannerError(error.context, _convert_mark(state, error.context_mark),
+                        error.problem, _convert_mark(state, error.problem_mark))
 end
 
 function _convert_error(state, error::YAML.ParserError)
@@ -731,11 +713,8 @@ function _convert_error(state, error::YAML.ParserError)
             problem_mark = YAML.firstmark(token)
         end
     end
-    return ParserError(_restore_characters(state, error.context),
-                       _convert_mark(state, error.context_mark),
-                       _restore_characters(state, problem),
-                       _convert_mark(state, problem_mark),
-                       _restore_characters(state, error.note))
+    return ParserError(error.context, _convert_mark(state, error.context_mark), problem,
+                       _convert_mark(state, problem_mark), error.note)
 end
 
 function _backend_failure_mark(state::_EventIteratorState)
@@ -848,6 +827,9 @@ end
 Parse `input` into a forward-only stream of [`Event`](@ref) objects without
 constructing Julia values.
 
+YAMLEvents implements YAML 1.1 syntax. An explicit directive declaring a newer
+YAML version raises [`ParserError`](@ref) as the iterator advances.
+
 The event stream preserves document boundaries, scalar styles, explicit tags,
 anchors, aliases, collection styles, and source marks. This is useful for tools
 that need to inspect YAML syntax before aliases, tags, or duplicate mapping keys
@@ -855,10 +837,10 @@ are resolved during construction.
 
 An `IO` input is read when the iterator is created, so seekable and forward-only
 streams are both supported. Invalid encoded input raises [`EncodingError`](@ref)
-while the iterator is created. Raw characters forbidden by YAML raise
-[`ScannerError`](@ref) during the same input-validation step.
-Other YAML syntax errors raise [`ScannerError`](@ref) or [`ParserError`](@ref)
-as the iterator advances.
+while the iterator is created. Characters whose invalidity can be established
+during input validation raise [`ScannerError`](@ref) during the same step. Other
+YAML syntax errors raise [`ScannerError`](@ref) or [`ParserError`](@ref) as the
+iterator advances.
 
 # Example
 

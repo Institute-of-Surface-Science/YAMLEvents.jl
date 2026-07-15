@@ -154,6 +154,14 @@
                                     directive_events))
     @test directive_scalar.tag == "tag:example.com,2026:value"
 
+    incompatible_version = try
+        collect(YAMLEvents.parse_events("%YAML 1.2\n---\ndata\n"))
+    catch exception
+        exception
+    end
+    @test incompatible_version isa YAMLEvents.ParserError
+    @test occursin("version 1.1 or earlier is required", incompatible_version.problem)
+
     escaped_tag_events = collect(YAMLEvents.parse_events("value: !foo%C3%A9 data\n"))
     escaped_tag_scalar = only(event
                               for event in escaped_tag_events

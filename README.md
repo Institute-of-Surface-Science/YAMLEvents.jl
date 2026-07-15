@@ -28,6 +28,10 @@ import Pkg
 Pkg.add(url="https://github.com/Institute-of-Surface-Science/YAMLEvents.jl")
 ```
 
+The parser implements YAML 1.1 syntax. A `%YAML` directive declaring a newer
+version is rejected with `ParserError` rather than being parsed under
+incompatible rules.
+
 ## Quick start
 
 ```julia
@@ -105,13 +109,14 @@ using its detected UTF encoding. This happens while `parse_events` buffers an
 `EncodingError`.
 
 Decoded input containing characters forbidden by YAML, including raw control
-characters or a misplaced byte-order mark, raises `ScannerError` while the
-iterator is created.
+characters or a misplaced byte-order mark, raises `ScannerError`. Characters
+whose invalidity can be established during input validation are reported while
+the iterator is created.
 
 Other malformed YAML raises `ScannerError` when decoded text cannot be tokenized
 or `ParserError` when valid tokens cannot form a YAML document. YAML parsing is
-lazy after input validation, so either syntax exception can be raised while
-iterating:
+lazy after input validation, so either syntax exception—including one reached
+before a later context-dependent character check—can be raised while iterating:
 
 ```julia
 try
