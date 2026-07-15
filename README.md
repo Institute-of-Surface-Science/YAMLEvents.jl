@@ -101,10 +101,14 @@ An event's `start_mark` points to the beginning of its syntax and its
 
 Invalid byte input raises `EncodingError` if it cannot be decoded using its
 detected UTF encoding. This happens while `parse_events` buffers an `IO` input.
+Decoded input containing characters forbidden by YAML, including raw control
+characters or a misplaced byte-order mark, raises `ScannerError` while the
+iterator is created.
 
-Malformed YAML raises `ScannerError` when decoded text cannot be tokenized or
-`ParserError` when valid tokens cannot form a YAML document. YAML parsing is
-lazy, so either syntax exception can be raised while iterating:
+Other malformed YAML raises `ScannerError` when decoded text cannot be tokenized
+or `ParserError` when valid tokens cannot form a YAML document. YAML parsing is
+lazy after input validation, so either syntax exception can be raised while
+iterating:
 
 ```julia
 try

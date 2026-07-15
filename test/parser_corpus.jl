@@ -99,12 +99,14 @@ end
     @test (second.start_mark.index, second.start_mark.line, second.start_mark.column) ==
           (20, 5, 0)
 
-    quoted_bom_events = collect(parse_events("first: \"a\ufeffb\"\nnext: value\n"))
-    next_scalar = only(event
-                       for event in quoted_bom_events
-                       if event isa ScalarEvent && event.value == "next")
-    @test (next_scalar.start_mark.index, next_scalar.start_mark.line,
-           next_scalar.start_mark.column) == (13, 2, 0)
+    quoted_bom_error = try
+        parse_events("first: \"a\ufeffb\"\nnext: value\n")
+    catch exception
+        exception
+    end
+    @test quoted_bom_error isa ScannerError
+    @test (quoted_bom_error.problem_mark.index, quoted_bom_error.problem_mark.line,
+           quoted_bom_error.problem_mark.column) == (9, 1, 9)
 end
 
 @testset "Input encodings" begin
@@ -118,6 +120,34 @@ end
         @test (attribute.start_mark.index, attribute.start_mark.line,
                attribute.start_mark.column) == (5, 2, 0)
     end
+end
+
+@testset "YAML character set" begin
+    for codepoint in (0x00, 0x01, 0x07, 0x08, 0x0b, 0x0c, 0x7f, 0x80, 0x9f, 0xfffe, 0xffff)
+        source = "value: a" * string(Char(codepoint)) * "b\nnext: value\n"
+        error = try
+            parse_events(source)
+        catch exception
+            exception
+        end
+        @test error isa ScannerError
+        @test error.problem_mark.index == 8
+        @test occursin("U+", error.problem)
+    end
+
+    crlf_error = try
+        parse_events("root:\r\n" * string(Char(0x01)))
+    catch exception
+        exception
+    end
+    @test crlf_error isa ScannerError
+    @test (crlf_error.problem_mark.index, crlf_error.problem_mark.line,
+           crlf_error.problem_mark.column) == (7, 2, 0)
+
+    escaped_null = only(event
+                        for event in parse_events("value: \"\\0\"\n")
+                        if event isa ScalarEvent && event.value != "value")
+    @test escaped_null.value == "\0"
 end
 
 @testset "Event source marks" begin
@@ -213,4 +243,10 @@ end
     @test windows_input.source == "a\nb\n"
     @test windows_input.newline_corrections == UInt64[2, 4]
     @test windows_input.character_count == 4
+
+    correction_iterator = parse_events(repeat("- \"can't\"\n", 100))
+    collect(correction_iterator)
+    converter = correction_iterator._state.mark_converter
+    @test length(converter.skipped_indices) == 100
+    @test converter.line_start_positions == collect(UInt64(0):UInt64(10):UInt64(1000))
 end

@@ -6,15 +6,16 @@ mutable struct _MarkConverter
     source::Union{String, Nothing}
     newline_corrections::Vector{UInt64}
     character_count::UInt64
+    line_start_positions::Union{Vector{UInt64}, Nothing}
     tokenstream::Union{YAML.TokenStream, Nothing}
     scanned_index::UInt64
     bom_end_indices::Vector{UInt64}
-    bom_lines::Vector{UInt64}
     skipped_indices::Vector{UInt64}
-    skipped_lines::Vector{UInt64}
     source_cursor::Int
     source_position::UInt64
     mark_overrides::Dict{NTuple{3, UInt64}, Tuple{UInt64, UInt64}}
+    scalar_errors::Dict{NTuple{3, UInt64}, Tuple{String, Mark}}
+    backend_failure_mark::Union{Mark, Nothing}
     reset_pending::Bool
     done::Bool
 end
@@ -75,6 +76,16 @@ end
 _is_line_break(char::Char) = char in ('\n', '\u0085', '\u2028', '\u2029')
 _is_inline_space(char::Char) = char == ' ' || char == '\t'
 
+function _line_start_positions(source::String)
+    positions = UInt64[0]
+    source_position = UInt64(0)
+    for char in source
+        source_position += 1
+        _is_line_break(char) && push!(positions, source_position)
+    end
+    return positions
+end
+
 function _advance_normal(source::String, source_index::Int, source_position::UInt64,
                          backend_index::UInt64, line::UInt64)
     char = source[source_index]
@@ -83,9 +94,8 @@ function _advance_normal(source::String, source_index::Int, source_position::UIn
 end
 
 function _advance_skipped!(converter::_MarkConverter, source_index::Int,
-                           source_position::UInt64, backend_index::UInt64, line::UInt64)
+                           source_position::UInt64, backend_index::UInt64)
     push!(converter.skipped_indices, backend_index)
-    push!(converter.skipped_lines, line)
     return nextind(converter.source, source_index), source_position + 1
 end
 
@@ -96,7 +106,7 @@ function _record_flow_breaks!(converter::_MarkConverter, source_index::Int,
         while source_index <= ncodeunits(source) && _is_inline_space(source[source_index])
             source_index, source_position = _advance_skipped!(converter, source_index,
                                                               source_position,
-                                                              backend_index, line)
+                                                              backend_index)
         end
         if source_index <= ncodeunits(source) && _is_line_break(source[source_index])
             source_index, source_position, backend_index, line = _advance_normal(source,
@@ -130,6 +140,14 @@ function _record_quoted_corrections!(converter::_MarkConverter, token::YAML.Scal
         char = source[source_index]
         next_index = nextind(source, source_index)
         next_char = next_index <= ncodeunits(source) ? source[next_index] : '\0'
+
+        if char == '\ufeff'
+            key = _mark_key(end_mark)
+            haskey(converter.scalar_errors, key) ||
+                (converter.scalar_errors[key] = ("byte order mark must not appear inside a scalar",
+                                                 _mark_at_source_position(converter,
+                                                                          source_position)))
+        end
 
         if char == style && !(style == '\'' && next_char == '\'')
             break
@@ -176,25 +194,36 @@ function _record_quoted_corrections!(converter::_MarkConverter, token::YAML.Scal
                (style == '\'' && (char == '"' || char == '\\'))
             source_index, source_position = _advance_skipped!(converter, source_index,
                                                               source_position,
-                                                              backend_index, line)
+                                                              backend_index)
         elseif style == '"' && char == '\\'
             source_index, source_position = _advance_skipped!(converter, source_index,
                                                               source_position,
-                                                              backend_index, line)
+                                                              backend_index)
             escaped = source[source_index]
             if haskey(YAML.ESCAPE_REPLACEMENTS, escaped)
                 source_index, source_position = _advance_skipped!(converter, source_index,
                                                                   source_position,
-                                                                  backend_index, line)
+                                                                  backend_index)
             elseif haskey(YAML.ESCAPE_CODES, escaped)
                 digits = YAML.ESCAPE_CODES[escaped]
                 source_index, source_position = _advance_skipped!(converter, source_index,
                                                                   source_position,
-                                                                  backend_index, line)
+                                                                  backend_index)
+                escape_position = source_position
+                codepoint = UInt32(0)
                 for _ in 1:digits
+                    codepoint = 16 * codepoint +
+                                parse(UInt32, string(source[source_index]); base = 16)
                     source_index, source_position, backend_index,
                     line = _advance_normal(source, source_index, source_position,
                                            backend_index, line)
+                end
+                if !isvalid(Char, codepoint)
+                    key = _mark_key(end_mark)
+                    haskey(converter.scalar_errors, key) ||
+                        (converter.scalar_errors[key] = ("escape sequence contains an invalid Unicode code point",
+                                                         _mark_at_source_position(converter,
+                                                                                  escape_position)))
                 end
             elseif _is_line_break(escaped)
                 source_index, source_position, backend_index, line = _advance_normal(source,
@@ -246,7 +275,7 @@ function _record_uri_corrections!(converter::_MarkConverter, token;
         if char == '%' && !(initial_percent_is_normal && first_character)
             source_index, source_position = _advance_skipped!(converter, source_index,
                                                               source_position,
-                                                              backend_index, line)
+                                                              backend_index)
         else
             source_index, source_position, backend_index, line = _advance_normal(source,
                                                                                  source_index,
@@ -267,7 +296,6 @@ function _record_token_corrections!(converter::_MarkConverter, token)
     if token isa YAML.ByteOrderMarkToken
         end_mark = YAML.lastmark(token)
         push!(converter.bom_end_indices, end_mark.index)
-        push!(converter.bom_lines, end_mark.line)
     elseif token isa YAML.ScalarToken && token.style in ('\'', '"')
         _record_quoted_corrections!(converter, token)
     elseif token isa YAML.TagToken
@@ -292,17 +320,29 @@ function _source_position_at_input(converter::_MarkConverter)
     return UInt64(fetched_characters - available_characters)
 end
 
-function _source_column(source::String, target_position::UInt64)
+function _source_line_column(source::String, target_position::UInt64)
     source_index = firstindex(source)
     position = UInt64(0)
+    line = UInt64(1)
     column = UInt64(0)
     while position < target_position
         char = source[source_index]
-        column = _is_line_break(char) ? 0 : column + 1
+        if _is_line_break(char)
+            line += 1
+            column = 0
+        else
+            column += 1
+        end
         source_index = nextind(source, source_index)
         position += 1
     end
-    return column
+    return line, column
+end
+
+function _mark_at_source_position(converter::_MarkConverter, source_position::UInt64)
+    correction_count = searchsortedlast(converter.newline_corrections, source_position)
+    line, column = _source_line_column(converter.source, source_position)
+    return Mark(source_position + UInt64(correction_count), line, column)
 end
 
 function _record_error_override!(converter::_MarkConverter, exception::YAML.ScannerError)
@@ -311,9 +351,14 @@ function _record_error_override!(converter::_MarkConverter, exception::YAML.Scan
     # unambiguous position for that problem mark.
     mark = exception.problem_mark
     source_position = _source_position_at_input(converter)
-    converter.mark_overrides[_mark_key(mark)] = (source_position,
-                                                 _source_column(converter.source,
-                                                                source_position))
+    _, column = _source_line_column(converter.source, source_position)
+    converter.mark_overrides[_mark_key(mark)] = (source_position, column)
+    return nothing
+end
+
+function _record_backend_failure!(converter::_MarkConverter)
+    source_position = _source_position_at_input(converter)
+    converter.backend_failure_mark = _mark_at_source_position(converter, source_position)
     return nothing
 end
 
@@ -326,6 +371,10 @@ function _next_mapping_token!(converter::_MarkConverter)
         catch exception
             if exception isa YAML.ScannerError
                 _record_error_override!(converter, exception)
+                converter.done = true
+                return nothing
+            elseif exception isa Base.CodePointError
+                _record_backend_failure!(converter)
                 converter.done = true
                 return nothing
             end
@@ -366,17 +415,13 @@ function _convert_mark(state::_EventIteratorState, mark::YAML.Mark)
 
     correction_count = searchsortedlast(converter.newline_corrections, normalized_index)
     original_index = normalized_index + UInt64(correction_count)
-    bom_column_correction = count(eachindex(converter.bom_end_indices)) do index
-        converter.bom_end_indices[index] <= mark.index &&
-            converter.bom_lines[index] == mark.line
+    column = if override !== nothing
+        override[2]
+    elseif converter.line_start_positions === nothing
+        mark.column
+    else
+        normalized_index - converter.line_start_positions[Int(mark.line)]
     end
-    skipped_column_correction = count(eachindex(converter.skipped_indices)) do index
-        converter.skipped_indices[index] <= mark.index &&
-            converter.skipped_lines[index] == mark.line
-    end
-    column = override === nothing ?
-             mark.column + UInt64(bom_column_correction + skipped_column_correction) :
-             override[2]
     return Mark(original_index, mark.line, column)
 end
 
@@ -386,6 +431,35 @@ function _marks(state, event)
     return _convert_mark(state, event.start_mark), _convert_mark(state, event.end_mark)
 end
 
+_decode_backend_tag(::Nothing, ::Mark) = nothing
+
+function _decode_backend_tag(tag::String, problem_mark::Mark)
+    isascii(tag) && return tag
+    bytes = UInt8[]
+    for char in tag
+        codepoint = UInt32(char)
+        if codepoint <= 0xff
+            push!(bytes, UInt8(codepoint))
+        else
+            append!(bytes, codeunits(string(char)))
+        end
+    end
+
+    decoded = String(bytes)
+    isvalid(decoded) || throw(ScannerError("while scanning a tag", problem_mark,
+                       "tag URI contains an invalid UTF-8 escape sequence",
+                       problem_mark))
+    return decoded
+end
+
+function _throw_scalar_error(state::_EventIteratorState, event, start_mark::Mark)
+    scalar_error = get(state.mark_converter.scalar_errors, _mark_key(event.end_mark),
+                       nothing)
+    scalar_error === nothing && return nothing
+    problem, problem_mark = scalar_error
+    throw(ScannerError("while scanning a quoted scalar", start_mark, problem, problem_mark))
+end
+
 function _convert_event(state, event::YAML.StreamStartEvent)
     return StreamStartEvent(_marks(state, event)..., state.encoding)
 end
@@ -393,8 +467,14 @@ end
 _convert_event(state, event::YAML.StreamEndEvent) = StreamEndEvent(_marks(state, event)...)
 
 function _convert_event(state, event::YAML.DocumentStartEvent)
-    tags = event.tags === nothing ? nothing : copy(event.tags)
-    return DocumentStartEvent(_marks(state, event)..., event.explicit, event.version, tags)
+    marks = _marks(state, event)
+    tags = if event.tags === nothing
+        nothing
+    else
+        Dict(handle => _decode_backend_tag(prefix, marks[1])
+             for (handle, prefix) in event.tags)
+    end
+    return DocumentStartEvent(marks..., event.explicit, event.version, tags)
 end
 
 function _convert_event(state, event::YAML.DocumentEndEvent)
@@ -406,14 +486,17 @@ function _convert_event(state, event::YAML.AliasEvent)
 end
 
 function _convert_event(state, event::YAML.ScalarEvent)
+    marks = _marks(state, event)
+    _throw_scalar_error(state, event, marks[1])
     implicit = (Bool(event.implicit[1]), Bool(event.implicit[2]))
-    return ScalarEvent(_marks(state, event)..., event.anchor, event.tag, implicit,
-                       event.value, event.style)
+    tag = _decode_backend_tag(event.tag, marks[1])
+    return ScalarEvent(marks..., event.anchor, tag, implicit, event.value, event.style)
 end
 
 function _convert_event(state, event::YAML.SequenceStartEvent)
-    return SequenceStartEvent(_marks(state, event)..., event.anchor, event.tag,
-                              event.implicit, event.flow_style)
+    marks = _marks(state, event)
+    tag = _decode_backend_tag(event.tag, marks[1])
+    return SequenceStartEvent(marks..., event.anchor, tag, event.implicit, event.flow_style)
 end
 
 function _convert_event(state, event::YAML.SequenceEndEvent)
@@ -421,8 +504,9 @@ function _convert_event(state, event::YAML.SequenceEndEvent)
 end
 
 function _convert_event(state, event::YAML.MappingStartEvent)
-    return MappingStartEvent(_marks(state, event)..., event.anchor, event.tag,
-                             event.implicit, event.flow_style)
+    marks = _marks(state, event)
+    tag = _decode_backend_tag(event.tag, marks[1])
+    return MappingStartEvent(marks..., event.anchor, tag, event.implicit, event.flow_style)
 end
 
 function _convert_event(state, event::YAML.MappingEndEvent)
@@ -439,15 +523,68 @@ function _convert_error(state, error::YAML.ParserError)
                        error.problem, _convert_mark(state, error.problem_mark), error.note)
 end
 
+function _convert_codepoint_error(state::_EventIteratorState, error::Base.CodePointError)
+    converter = state.mark_converter
+    while !converter.done
+        token = _next_mapping_token!(converter)
+        token === nothing && break
+        _record_token_corrections!(converter, token)
+    end
+    problem_mark = something(converter.backend_failure_mark, Mark(0, 1, 0))
+    codepoint = "U+" * uppercase(string(error.code; base = 16, pad = 8))
+    return ScannerError(nothing, nothing,
+                        "escape sequence contains invalid Unicode code point $codepoint",
+                        problem_mark)
+end
+
 function _forward!(state::_EventIteratorState)
     try
         return YAML.forward!(state.stream)
     catch exception
         if exception isa Union{YAML.ScannerError, YAML.ParserError}
             throw(_convert_error(state, exception))
+        elseif exception isa Base.CodePointError
+            throw(_convert_codepoint_error(state, exception))
         end
         rethrow()
     end
+end
+
+function _resume_after_explicit_document!(state::_EventIteratorState)
+    # YAML.jl stops tokenization at every explicit document-end marker. Resume
+    # the existing parser at its explicit-document state, skipping any repeated
+    # suffix markers without pretending the following document is the first
+    # (and therefore potentially implicit) document in a new stream.
+    state.stream.end_of_stream = nothing
+    try
+        while true
+            state.tokenstream.done = false
+            token = YAML.peek(state.tokenstream)
+            token isa YAML.DocumentEndToken || break
+            YAML.forward!(state.tokenstream)
+        end
+        if token isa YAML.ByteOrderMarkToken
+            YAML.forward!(state.tokenstream)
+            token = YAML.peek(state.tokenstream)
+        end
+        if !(token isa
+             Union{YAML.DirectiveToken, YAML.DocumentStartToken, YAML.StreamEndToken})
+            problem_mark = _convert_mark(state, YAML.firstmark(token))
+            throw(ParserError(nothing, nothing,
+                              "expected '<document start>', but found $(typeof(token))",
+                              problem_mark, nothing))
+        end
+    catch exception
+        if exception isa Union{YAML.ScannerError, YAML.ParserError}
+            throw(_convert_error(state, exception))
+        elseif exception isa Base.CodePointError
+            throw(_convert_codepoint_error(state, exception))
+        end
+        rethrow()
+    end
+
+    state.stream.state = YAML.parse_document_start
+    return _forward!(state)
 end
 
 function Base.iterate(iterator::YAMLEventIterator, _ = nothing)
@@ -457,15 +594,12 @@ function Base.iterate(iterator::YAMLEventIterator, _ = nothing)
     event === nothing && return nothing
 
     # The internal parser treats an explicit document end (`...`) as the end
-    # of its EventStream. Restart it while suppressing the artificial stream
+    # of its EventStream. Resume it while suppressing the artificial stream
     # boundary so this public iterator represents the complete YAML stream.
     if event isa YAML.StreamEndEvent &&
        state.previous_event isa DocumentEndEvent &&
        state.previous_event.explicit
-        YAML.reset!(state.tokenstream)
-        state.stream = YAML.EventStream(state.tokenstream)
-        @assert _forward!(state) isa YAML.StreamStartEvent
-        event = _forward!(state)
+        event = _resume_after_explicit_document!(state)
     end
 
     if event === nothing
@@ -492,8 +626,10 @@ are resolved during construction.
 
 An `IO` input is read when the iterator is created, so seekable and forward-only
 streams are both supported. Invalid encoded byte input raises
-[`EncodingError`](@ref) while the iterator is created. YAML syntax errors raise
-[`ScannerError`](@ref) or [`ParserError`](@ref) as the iterator advances.
+[`EncodingError`](@ref) while the iterator is created. Raw characters forbidden
+by YAML raise [`ScannerError`](@ref) during the same input-validation step.
+Other YAML syntax errors raise [`ScannerError`](@ref) or [`ParserError`](@ref)
+as the iterator advances.
 
 # Example
 
@@ -516,11 +652,14 @@ function _parse_events(input::_PreparedInput)
     needs_mapping = any(char -> char in ('\ufeff', '\'', '"', '\\', '%'), input.source)
     mapping_source = needs_mapping ? input.source : nothing
     mapping_tokenstream = needs_mapping ? YAML.TokenStream(IOBuffer(input.source)) : nothing
+    line_start_positions = needs_mapping ? _line_start_positions(input.source) : nothing
     converter = _MarkConverter(mapping_source, input.newline_corrections,
-                               input.character_count, mapping_tokenstream, 0, UInt64[],
-                               UInt64[], UInt64[], UInt64[], firstindex(input.source), 0,
-                               Dict{NTuple{3, UInt64}, Tuple{UInt64, UInt64}}(), false,
-                               false)
+                               input.character_count, line_start_positions,
+                               mapping_tokenstream, 0, UInt64[], UInt64[],
+                               firstindex(input.source), 0,
+                               Dict{NTuple{3, UInt64}, Tuple{UInt64, UInt64}}(),
+                               Dict{NTuple{3, UInt64}, Tuple{String, Mark}}(), nothing,
+                               false, false)
     state = _EventIteratorState(tokenstream, YAML.EventStream(tokenstream), converter,
                                 input.encoding, nothing, false)
     return YAMLEventIterator(state)

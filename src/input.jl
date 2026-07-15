@@ -5,6 +5,61 @@ struct _PreparedInput
     encoding::String
 end
 
+function _codepoint_name(char::Char)
+    codepoint = UInt32(char)
+    width = codepoint <= 0xffff ? 4 : 8
+    return "U+" * uppercase(string(codepoint; base = 16, pad = width))
+end
+
+function _is_yaml_printable(char::Char)
+    codepoint = UInt32(char)
+    return codepoint in (0x09, 0x0a, 0x0d, 0x85) ||
+           0x20 <= codepoint <= 0x7e ||
+           0xa0 <= codepoint <= 0xd7ff ||
+           0xe000 <= codepoint <= 0xfffd ||
+           0x10000 <= codepoint <= 0x10ffff
+end
+
+function _validate_source_characters(source::AbstractString)
+    character_index = UInt64(0)
+    line = UInt64(1)
+    column = UInt64(0)
+    previous_was_carriage_return = false
+
+    for char in source
+        mark = Mark(character_index, line, column)
+        if char == '\ufeff'
+            column == 0 || throw(ScannerError(nothing, nothing,
+                               "byte order mark must appear at the beginning of a document",
+                               mark))
+        elseif !_is_yaml_printable(char)
+            throw(ScannerError(nothing, nothing,
+                               "found non-printable character $(_codepoint_name(char))",
+                               mark))
+        end
+
+        character_index += 1
+        if char == '\r'
+            line += 1
+            column = 0
+            previous_was_carriage_return = true
+        elseif char == '\n'
+            previous_was_carriage_return || (line += 1)
+            column = 0
+            previous_was_carriage_return = false
+        elseif char in ('\u0085', '\u2028', '\u2029')
+            line += 1
+            column = 0
+            previous_was_carriage_return = false
+        else
+            column += 1
+            previous_was_carriage_return = false
+        end
+    end
+
+    return nothing
+end
+
 function _has_prefix(bytes::Vector{UInt8}, prefix::Tuple{Vararg{UInt8}})
     length(bytes) >= length(prefix) || return false
     return all(index -> bytes[index] == prefix[index], eachindex(prefix))
@@ -67,6 +122,7 @@ function _normalize_newlines(source::AbstractString)
 end
 
 function _prepare_input(source::AbstractString, encoding::String = "UTF-8")
+    _validate_source_characters(source)
     normalized, newline_corrections, character_count = _normalize_newlines(source)
     return _PreparedInput(normalized, newline_corrections, character_count, encoding)
 end

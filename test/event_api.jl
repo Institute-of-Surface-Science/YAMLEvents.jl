@@ -90,6 +90,22 @@
            for event in multi_document_events if event isa YAMLEvents.ScalarEvent] ==
           ["first", "second"]
 
+    repeated_end_source = "first\n... # first suffix\n... # repeated suffix\n---\nsecond\n"
+    repeated_end_events = collect(YAMLEvents.parse_events(repeated_end_source))
+    @test count(event -> event isa YAMLEvents.DocumentStartEvent, repeated_end_events) == 2
+    @test [event.value for event in repeated_end_events if event isa YAMLEvents.ScalarEvent] ==
+          ["first", "second"]
+
+    implicit_after_end_error = try
+        collect(YAMLEvents.parse_events("first\n...\nsecond\n"))
+    catch exception
+        exception
+    end
+    @test implicit_after_end_error isa YAMLEvents.ParserError
+    @test (implicit_after_end_error.problem_mark.index,
+           implicit_after_end_error.problem_mark.line,
+           implicit_after_end_error.problem_mark.column) == (10, 3, 0)
+
     syntax_as_data = collect(YAMLEvents.parse_events("value: \"!tag &anchor *alias << [ {\""))
     @test isempty(filter(event -> event isa YAMLEvents.AliasEvent, syntax_as_data))
     syntax_scalar = first(filter(event -> event isa YAMLEvents.ScalarEvent &&
@@ -124,6 +140,26 @@
     directive_scalar = first(filter(event -> event isa YAMLEvents.ScalarEvent,
                                     directive_events))
     @test directive_scalar.tag == "tag:example.com,2026:value"
+
+    escaped_tag_events = collect(YAMLEvents.parse_events("value: !foo%C3%A9 data\n"))
+    escaped_tag_scalar = only(event
+                              for event in escaped_tag_events
+                              if event isa YAMLEvents.ScalarEvent && event.value == "data")
+    @test escaped_tag_scalar.tag == "!fooé"
+    @test (escaped_tag_scalar.start_mark.index, escaped_tag_scalar.end_mark.index) ==
+          (7, 22)
+
+    escaped_directive_source = "%TAG !e! tag:example.com,%C3%A9:\n---\n!e!x data\n"
+    escaped_directive_events = collect(YAMLEvents.parse_events(escaped_directive_source))
+    escaped_directive_document = only(event
+                                      for event in escaped_directive_events
+                                      if event isa YAMLEvents.DocumentStartEvent)
+    escaped_directive_scalar = only(event
+                                    for event in escaped_directive_events
+                                    if event isa YAMLEvents.ScalarEvent)
+    @test escaped_directive_document.tags == Dict("!e!" => "tag:example.com,é:")
+    @test escaped_directive_scalar.tag == "tag:example.com,é:x"
+    @test_throws YAMLEvents.ScannerError collect(YAMLEvents.parse_events("value: !foo%FF data\n"))
 
     @test_throws YAMLEvents.ParserError collect(YAMLEvents.parse_events("[1,,2]"))
     @test_throws YAMLEvents.ScannerError collect(YAMLEvents.parse_events("value: %"))
@@ -197,6 +233,26 @@
     @test windows_escape_error.problem_mark.index == 19
     @test windows_escape_error.problem_mark.line == 2
     @test windows_escape_error.problem_mark.column == 12
+
+    for escape in ("\\uD800", "\\uDFFF", "\\U00110000", "\\UFFFFFFFF")
+        invalid_unicode_error = try
+            collect(YAMLEvents.parse_events("value: \"" * escape * "\""))
+        catch exception
+            exception
+        end
+        @test invalid_unicode_error isa YAMLEvents.ScannerError
+        @test invalid_unicode_error.problem_mark.index == 10
+        @test invalid_unicode_error.problem_mark.line == 1
+        @test invalid_unicode_error.problem_mark.column == 10
+    end
+
+    unicode_escape_events = collect(YAMLEvents.parse_events("value: \"\\U0001F600\""))
+    unicode_escape_scalar = only(event
+                                 for event in unicode_escape_events
+                                 if event isa YAMLEvents.ScalarEvent &&
+        event.value != "value")
+    @test unicode_escape_scalar.value == "😀"
+    @test isvalid(unicode_escape_scalar.value)
 
     warning_source = "%FOO bar\n--- value"
     @test_logs (:warn, r"unknown directive name: \"FOO\"") begin
