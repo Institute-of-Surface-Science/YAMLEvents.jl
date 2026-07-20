@@ -1,5 +1,13 @@
 # YAMLEvents.jl release notes
 
+## Version 0.1.1
+
+- Normalize overflowing YAML directive components and invalid Unicode escapes
+  to source-aware `ScannerError` exceptions.
+- Preserve context and problem marks for scanner conversion failures.
+- Guarantee that malformed decoded YAML is reported as `ScannerError` or
+  `ParserError` without converting unrelated internal failures.
+
 ## Version 0.1.0
 
 Initial release.

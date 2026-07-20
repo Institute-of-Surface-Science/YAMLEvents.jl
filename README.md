@@ -113,10 +113,12 @@ characters or a misplaced byte-order mark, raises `ScannerError`. Characters
 whose invalidity can be established during input validation are reported while
 the iterator is created.
 
-Other malformed YAML raises `ScannerError` when decoded text cannot be tokenized
-or `ParserError` when valid tokens cannot form a YAML document. YAML parsing is
-lazy after input validation, so either syntax exception—including one reached
-before a later context-dependent character check—can be raised while iterating:
+Other malformed decoded YAML raises only `ScannerError` when the text cannot be
+tokenized or `ParserError` when valid tokens cannot form a YAML document. YAML
+parsing is lazy after input validation, so either syntax exception—including one
+reached before a later context-dependent character check—can be raised while
+iterating. Internal failures that are not attributable to malformed source are
+deliberately rethrown rather than presented as input errors:
 
 ```julia
 try
