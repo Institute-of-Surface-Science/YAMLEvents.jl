@@ -1,3 +1,14 @@
+function captured_parse_error(input)
+    try
+        collect(YAMLEvents.parse_events(input))
+        return nothing
+    catch exception
+        return exception
+    end
+end
+
+mark_coordinates(mark) = (mark.index, mark.line, mark.column)
+
 @testset "Event API" begin
     source = """root:
       anchor: &base !!str plain
@@ -243,19 +254,28 @@
     @test malformed_string_error.encoding == "UTF-8"
     @test malformed_string_error.byte_sequence == "c3"
 
-    oversized_version = "%YAML 999999999999999999999999999999.1\n---\na\n"
-    for (prefix, problem_index) in (("", 6), ("\ufeff", 7))
-        oversized_iterator = YAMLEvents.parse_events(prefix * oversized_version)
-        oversized_error = try
-            collect(oversized_iterator)
-        catch exception
-            exception
-        end
+    oversized_component = string(BigInt(typemax(Int)) + 1)
+    oversized_versions = (("%YAML $oversized_component.1\n---\na\n", (0, 1, 0), (6, 1, 6)),
+                          ("%YAML 1.$oversized_component\n---\na\n", (0, 1, 0), (8, 1, 8)),
+                          ("\ufeff%YAML $oversized_component.1\n---\na\n", (1, 1, 1),
+                           (7, 1, 7)),
+                          ("first\r\n...\r\n%YAML $oversized_component.1\r\n---\r\nsecond\r\n",
+                           (12, 3, 0), (18, 3, 6)))
+    for (source, context_mark, problem_mark) in oversized_versions
+        oversized_iterator = YAMLEvents.parse_events(source)
+        oversized_error = captured_parse_error(source)
         @test oversized_error isa YAMLEvents.ScannerError
+        @test oversized_error.context == "while scanning a directive"
+        @test mark_coordinates(oversized_error.context_mark) == context_mark
         @test occursin("integer that is too large", oversized_error.problem)
-        @test (oversized_error.problem_mark.index, oversized_error.problem_mark.line,
-               oversized_error.problem_mark.column) == (problem_index, 1, problem_index)
+        @test mark_coordinates(oversized_error.problem_mark) == problem_mark
+        @test iterate(oversized_iterator) !== nothing
     end
+
+    io_overflow = captured_parse_error(IOBuffer("%YAML 1.$oversized_component\n---\na\n"))
+    @test io_overflow isa YAMLEvents.ScannerError
+    @test mark_coordinates(io_overflow.context_mark) == (0, 1, 0)
+    @test mark_coordinates(io_overflow.problem_mark) == (8, 1, 8)
 
     windows_error = try
         collect(YAMLEvents.parse_events("root:\r\n  value: %\r\n"))
@@ -297,25 +317,75 @@
     @test windows_escape_error.problem_mark.line == 2
     @test windows_escape_error.problem_mark.column == 12
 
-    for escape in ("\\uD800", "\\uDFFF", "\\U00110000", "\\UFFFFFFFF")
-        invalid_unicode_error = try
-            collect(YAMLEvents.parse_events("value: \"" * escape * "\""))
-        catch exception
-            exception
-        end
+    for (escape,
+         codepoint) in (("\\uD800", "U+D800"), ("\\uDFFF", "U+DFFF"),
+                        ("\\U0000D800", "U+D800"), ("\\U00110000", "U+00110000"),
+                        ("\\UFFFFFFFF", "U+FFFFFFFF"))
+        invalid_unicode_error = captured_parse_error("value: \"" * escape * "\"")
         @test invalid_unicode_error isa YAMLEvents.ScannerError
-        @test invalid_unicode_error.problem_mark.index == 10
-        @test invalid_unicode_error.problem_mark.line == 1
-        @test invalid_unicode_error.problem_mark.column == 10
+        @test invalid_unicode_error.context == "while scanning a double-quoted scalar"
+        @test mark_coordinates(invalid_unicode_error.context_mark) == (7, 1, 7)
+        @test occursin(codepoint, invalid_unicode_error.problem)
+        @test mark_coordinates(invalid_unicode_error.problem_mark) == (10, 1, 10)
     end
 
-    unicode_escape_events = collect(YAMLEvents.parse_events("value: \"\\U0001F600\""))
-    unicode_escape_scalar = only(event
-                                 for event in unicode_escape_events
-                                 if event isa YAMLEvents.ScalarEvent &&
-        event.value != "value")
-    @test unicode_escape_scalar.value == "😀"
-    @test isvalid(unicode_escape_scalar.value)
+    corrected_unicode_source = "root: é\r\nvalue: \"\\UFFFFFFFF\"\r\n"
+    corrected_unicode_error = captured_parse_error(IOBuffer(corrected_unicode_source))
+    @test corrected_unicode_error isa YAMLEvents.ScannerError
+    @test mark_coordinates(corrected_unicode_error.context_mark) == (16, 2, 7)
+    @test mark_coordinates(corrected_unicode_error.problem_mark) == (19, 2, 10)
+
+    escaped_quote_error = captured_parse_error("value: \"a\\\"b\\uD800\"\n")
+    @test escaped_quote_error isa YAMLEvents.ScannerError
+    @test mark_coordinates(escaped_quote_error.context_mark) == (7, 1, 7)
+    @test mark_coordinates(escaped_quote_error.problem_mark) == (14, 1, 14)
+
+    valid_unicode_escapes = (("\\uD7FF", Char(0xd7ff)), ("\\uE000", Char(0xe000)),
+                             ("\\U0001F600", '😀'), ("\\U0010FFFF", Char(0x10ffff)))
+    for (escape, expected) in valid_unicode_escapes
+        unicode_escape_events = collect(YAMLEvents.parse_events("value: \"$escape\""))
+        unicode_escape_scalar = only(event
+                                     for event in unicode_escape_events
+                                     if event isa YAMLEvents.ScalarEvent &&
+                                        event.value != "value")
+        @test unicode_escape_scalar.value == string(expected)
+        @test isvalid(unicode_escape_scalar.value)
+    end
+
+    conversion_audit_sources = ("%YAML .1\n---\na\n", "value: |0\n text\n",
+                                "value: !foo%G0 data\n", "value: \"\\U0000ZZZZ\"\n")
+    for source in conversion_audit_sources
+        error = captured_parse_error(source)
+        @test error isa Union{YAMLEvents.ScannerError, YAMLEvents.ParserError}
+    end
+
+    block_scalar_events = collect(YAMLEvents.parse_events("value: |1\n text\n"))
+    @test any(event -> event isa YAMLEvents.ScalarEvent && event.value == "text\n",
+              block_scalar_events)
+
+    simulated_32_bit_state = YAMLEvents.parse_events("value: \"\\UFFFFFFFF\"\n")._state
+    simulated_32_bit_error = YAMLEvents._unicode_escape_error(simulated_32_bit_state,
+                                                              OverflowError("32-bit"),
+                                                              UInt64(10), typemax(Int32))
+    @test simulated_32_bit_error isa YAMLEvents.ScannerError
+    @test occursin("U+FFFFFFFF", simulated_32_bit_error.problem)
+    @test YAMLEvents._unicode_escape_error(simulated_32_bit_state,
+                                           OverflowError("unrelated"), UInt64(10),
+                                           typemax(Int64)) === nothing
+
+    unrelated_iterator = YAMLEvents.parse_events("%YAML $oversized_component.1\n---\na\n")
+    for _ in 1:6
+        YAMLEvents.YAML.forward!(unrelated_iterator._state.tokenstream.input)
+    end
+    unrelated_error = try
+        YAMLEvents._with_error_conversion(unrelated_iterator._state) do
+            throw(OverflowError("sentinel"))
+        end
+    catch exception
+        exception
+    end
+    @test unrelated_error isa OverflowError
+    @test unrelated_error.msg == "sentinel"
 
     warning_source = "%FOO bar\n--- value"
     @test_logs (:warn, r"unknown directive name: \"FOO\"") begin

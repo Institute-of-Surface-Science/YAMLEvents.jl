@@ -15,7 +15,6 @@ mutable struct _MarkConverter
     source_position::UInt64
     mark_overrides::Dict{NTuple{3, UInt64}, Tuple{UInt64, UInt64}}
     scalar_errors::Dict{NTuple{3, UInt64}, Tuple{String, Mark}}
-    backend_failure_mark::Union{Mark, Nothing}
     reset_pending::Bool
     done::Bool
 end
@@ -75,6 +74,22 @@ end
 
 _is_line_break(char::Char) = char in ('\n', '\u0085', '\u2028', '\u2029')
 _is_inline_space(char::Char) = char == ' ' || char == '\t'
+
+function _ascii_hex_value(char::Char)
+    if '0' <= char <= '9'
+        return UInt32(char) - UInt32('0')
+    elseif 'A' <= char <= 'F'
+        return UInt32(char) - UInt32('A') + UInt32(10)
+    elseif 'a' <= char <= 'f'
+        return UInt32(char) - UInt32('a') + UInt32(10)
+    end
+    return nothing
+end
+
+function _unicode_codepoint_name(codepoint::UInt32)
+    width = codepoint <= 0xffff ? 4 : 8
+    return "U+" * uppercase(string(codepoint; base = 16, pad = width))
+end
 
 function _line_start_positions(source::String)
     positions = UInt64[0]
@@ -204,8 +219,9 @@ function _record_quoted_corrections!(converter::_MarkConverter, token::YAML.Scal
                 escape_position = source_position
                 codepoint = UInt32(0)
                 for _ in 1:digits
-                    codepoint = 16 * codepoint +
-                                parse(UInt32, string(source[source_index]); base = 16)
+                    digit = _ascii_hex_value(source[source_index])
+                    digit === nothing && error("could not align YAML Unicode escape")
+                    codepoint = UInt32(16) * codepoint + digit
                     source_index, source_position, backend_index,
                     line = _advance_normal(source, source_index, source_position,
                                            backend_index, line)
@@ -213,7 +229,7 @@ function _record_quoted_corrections!(converter::_MarkConverter, token::YAML.Scal
                 if !isvalid(Char, codepoint)
                     key = _mark_key(end_mark)
                     haskey(converter.scalar_errors, key) ||
-                        (converter.scalar_errors[key] = ("escape sequence contains an invalid Unicode code point",
+                        (converter.scalar_errors[key] = ("escape sequence contains invalid Unicode code point $(_unicode_codepoint_name(codepoint))",
                                                          _mark_at_source_position(converter,
                                                                                   escape_position)))
                 end
@@ -341,8 +357,7 @@ function _validation_converter(input::_PreparedInput)
                           input.character_count, nothing, nothing, 0, UInt64[], UInt64[],
                           firstindex(input.source), 0,
                           Dict{NTuple{3, UInt64}, Tuple{UInt64, UInt64}}(),
-                          Dict{NTuple{3, UInt64}, Tuple{String, Mark}}(), nothing,
-                          false, false)
+                          Dict{NTuple{3, UInt64}, Tuple{String, Mark}}(), false, false)
 end
 
 function _resolve_quoted_characters!(resolved::BitVector,
@@ -484,18 +499,21 @@ function _validate_source_characters(input::_PreparedInput)
     return nothing
 end
 
-function _source_position_at_input(converter::_MarkConverter)
-    buffered_input = converter.tokenstream.input
+function _source_position_at_input(source::String, tokenstream::YAML.TokenStream)
+    buffered_input = tokenstream.input
     byte_position = position(buffered_input.input)
     fetched_characters = if byte_position == 0
         0
     else
-        length(SubString(converter.source, firstindex(converter.source),
-                         prevind(converter.source, byte_position + 1)))
+        length(SubString(source, firstindex(source), prevind(source, byte_position + 1)))
     end
     available_characters = count(!=('\0'),
                                  @view(buffered_input.buffer[(buffered_input.offset + 1):(buffered_input.offset + buffered_input.avail)]))
     return UInt64(fetched_characters - available_characters)
+end
+
+function _source_position_at_input(converter::_MarkConverter)
+    return _source_position_at_input(converter.source, converter.tokenstream)
 end
 
 function _source_line_column(source::String, target_position::UInt64)
@@ -517,6 +535,17 @@ function _source_line_column(source::String, target_position::UInt64)
     return line, column
 end
 
+function _source_index_at_position(source::String, source_position::UInt64)
+    source_position <= length(source) || return nothing
+    return nextind(source, 0, Int(source_position) + 1)
+end
+
+function _source_position_at_index(source::String, source_index::Int)
+    source_index == firstindex(source) && return UInt64(0)
+    preceding = SubString(source, firstindex(source), prevind(source, source_index))
+    return UInt64(length(preceding))
+end
+
 function _mark_at_source_position(converter::_MarkConverter, source_position::UInt64)
     correction_count = searchsortedlast(converter.newline_corrections, source_position)
     line, column = _source_line_column(converter.source, source_position)
@@ -534,9 +563,21 @@ function _record_error_override!(converter::_MarkConverter, exception::YAML.Scan
     return nothing
 end
 
-function _record_backend_failure!(converter::_MarkConverter)
-    source_position = _source_position_at_input(converter)
-    converter.backend_failure_mark = _mark_at_source_position(converter, source_position)
+function _yaml_scanner_frame(backtrace, function_name::Symbol)
+    scanner_path = normpath(joinpath(dirname(pathof(YAML)), "scanner.jl"))
+    return any(stacktrace(backtrace)) do frame
+        frame.func === function_name || return false
+        return normpath(String(frame.file)) == scanner_path
+    end
+end
+
+function _scanner_conversion_kind(exception, backtrace)
+    if exception isa Base.CodePointError
+        _yaml_scanner_frame(backtrace, :scan_flow_scalar_non_spaces) && return :unicode
+    elseif exception isa OverflowError
+        _yaml_scanner_frame(backtrace, :scan_yaml_directive_number) && return :directive
+        _yaml_scanner_frame(backtrace, :scan_flow_scalar_non_spaces) && return :unicode
+    end
     return nothing
 end
 
@@ -552,7 +593,8 @@ function _next_mapping_token!(converter::_MarkConverter)
                 converter.done = true
                 return nothing
             elseif exception isa Union{Base.CodePointError, OverflowError}
-                _record_backend_failure!(converter)
+                _scanner_conversion_kind(exception, catch_backtrace()) === nothing &&
+                    rethrow()
                 converter.done = true
                 return nothing
             end
@@ -635,7 +677,8 @@ function _throw_scalar_error(state::_EventIteratorState, event, start_mark::Mark
                        nothing)
     scalar_error === nothing && return nothing
     problem, problem_mark = scalar_error
-    throw(ScannerError("while scanning a quoted scalar", start_mark, problem, problem_mark))
+    throw(ScannerError("while scanning a double-quoted scalar", start_mark, problem,
+                       problem_mark))
 end
 
 function _convert_event(state, event::YAML.StreamStartEvent)
@@ -717,42 +760,166 @@ function _convert_error(state, error::YAML.ParserError)
                        _convert_mark(state, problem_mark), error.note)
 end
 
-function _backend_failure_mark(state::_EventIteratorState)
+function _source_scanner_position(state::_EventIteratorState)
     converter = state.mark_converter
-    while !converter.done
-        token = _next_mapping_token!(converter)
-        token === nothing && break
-        _record_token_corrections!(converter, token)
+    converter.source === nothing && return nothing
+    return _source_position_at_input(converter.source, state.tokenstream)
+end
+
+# YAML.jl 0.4.16 also parses a one-digit block-scalar indentation indicator
+# and two-digit tag URI escapes. Those conversions are bounded; only directive
+# components and Unicode-to-Char conversion require source-error normalization.
+function _escaped_codepoint(source::String, first_digit::Int, digits::Int)
+    index = first_digit
+    codepoint = UInt32(0)
+    for _ in 1:digits
+        index <= ncodeunits(source) || return nothing
+        digit = _ascii_hex_value(source[index])
+        digit === nothing && return nothing
+        codepoint = UInt32(16) * codepoint + digit
+        index = nextind(source, index)
     end
-    return something(converter.backend_failure_mark, Mark(0, 1, 0))
+    return codepoint
 end
 
-function _convert_codepoint_error(state::_EventIteratorState, error::Base.CodePointError)
-    problem_mark = _backend_failure_mark(state)
-    codepoint = "U+" * uppercase(string(error.code; base = 16, pad = 8))
-    return ScannerError(nothing, nothing,
-                        "escape sequence contains invalid Unicode code point $codepoint",
-                        problem_mark)
+function _opening_double_quote(source::String, before::Int)
+    quote_index = prevind(source, before)
+    while quote_index >= firstindex(source)
+        if source[quote_index] != '"'
+            quote_index = prevind(source, quote_index)
+            continue
+        end
+        preceding_backslashes = 0
+        index = prevind(source, quote_index)
+        while index >= firstindex(source) && source[index] == '\\'
+            preceding_backslashes += 1
+            index = prevind(source, index)
+        end
+        iseven(preceding_backslashes) && return quote_index
+        quote_index = index
+    end
+    return nothing
 end
 
-function _convert_overflow_error(state::_EventIteratorState)
-    return ScannerError(nothing, nothing,
+function _unicode_escape_error(state::_EventIteratorState,
+                               exception::Union{Base.CodePointError, OverflowError},
+                               source_position::UInt64,
+                               integer_maximum::Integer = typemax(Int))
+    converter = state.mark_converter
+    source = converter.source
+    first_digit = _source_index_at_position(source, source_position)
+    first_digit === nothing && return nothing
+    first_digit > firstindex(source) || return nothing
+    escape_code_index = prevind(source, first_digit)
+    escape_code_index > firstindex(source) || return nothing
+    backslash_index = prevind(source, escape_code_index)
+    backslash_index >= firstindex(source) || return nothing
+    source[backslash_index] == '\\' || return nothing
+    escape_code = source[escape_code_index]
+    digits = get(YAML.ESCAPE_CODES, escape_code, nothing)
+    digits === nothing && return nothing
+    codepoint = _escaped_codepoint(source, first_digit, digits)
+    codepoint === nothing && return nothing
+    isvalid(Char, codepoint) && return nothing
+    if exception isa Base.CodePointError
+        exception.code == codepoint || return nothing
+    else
+        codepoint > integer_maximum || return nothing
+    end
+
+    quote_index = _opening_double_quote(source, backslash_index)
+    quote_index === nothing && return nothing
+    context_position = _source_position_at_index(source, quote_index)
+    return ScannerError("while scanning a double-quoted scalar",
+                        _mark_at_source_position(converter, context_position),
+                        "escape sequence contains invalid Unicode code point $(_unicode_codepoint_name(codepoint))",
+                        _mark_at_source_position(converter, source_position))
+end
+
+function _line_start_index(source::String, position::Int)
+    index = prevind(source, position)
+    while index >= firstindex(source)
+        _is_line_break(source[index]) && return nextind(source, index)
+        index = prevind(source, index)
+    end
+    return firstindex(source)
+end
+
+function _yaml_directive_component(source::String, first_digit::Int)
+    directive_index = _line_start_index(source, first_digit)
+    source[directive_index] == '\ufeff' &&
+        (directive_index = nextind(source, directive_index))
+    startswith(SubString(source, directive_index), "%YAML") || return nothing
+
+    index = nextind(source, directive_index, 5)
+    while index <= ncodeunits(source) && source[index] in (' ', ':')
+        index = nextind(source, index)
+    end
+    major_start = index
+    while index <= ncodeunits(source) && '0' <= source[index] <= '9'
+        index = nextind(source, index)
+    end
+    if first_digit != major_start
+        index <= ncodeunits(source) && source[index] == '.' || return nothing
+        index = nextind(source, index)
+        first_digit == index || return nothing
+    end
+
+    last_digit = first_digit
+    while last_digit <= ncodeunits(source) && '0' <= source[last_digit] <= '9'
+        last_digit = nextind(source, last_digit)
+    end
+    last_digit > first_digit || return nothing
+    component = SubString(source, first_digit, prevind(source, last_digit))
+    tryparse(Int, component) === nothing || return nothing
+    return directive_index
+end
+
+function _directive_overflow_error(state::_EventIteratorState, source_position::UInt64)
+    converter = state.mark_converter
+    source = converter.source
+    first_digit = _source_index_at_position(source, source_position)
+    first_digit === nothing && return nothing
+    first_digit <= ncodeunits(source) || return nothing
+    directive_index = _yaml_directive_component(source, first_digit)
+    directive_index === nothing && return nothing
+    context_position = _source_position_at_index(source, directive_index)
+    return ScannerError("while scanning a directive",
+                        _mark_at_source_position(converter, context_position),
                         "YAML directive contains an integer that is too large",
-                        _backend_failure_mark(state))
+                        _mark_at_source_position(converter, source_position))
 end
 
-function _forward!(state::_EventIteratorState)
+function _source_scanner_error(state::_EventIteratorState,
+                               exception::Union{Base.CodePointError, OverflowError},
+                               backtrace)
+    kind = _scanner_conversion_kind(exception, backtrace)
+    kind === nothing && return nothing
+    source_position = _source_scanner_position(state)
+    source_position === nothing && return nothing
+    if kind === :unicode
+        return _unicode_escape_error(state, exception, source_position)
+    end
+    return _directive_overflow_error(state, source_position)
+end
+
+function _with_error_conversion(operation, state::_EventIteratorState)
     try
-        return YAML.forward!(state.stream)
+        return operation()
     catch exception
         if exception isa Union{YAML.ScannerError, YAML.ParserError}
             throw(_convert_error(state, exception))
-        elseif exception isa Base.CodePointError
-            throw(_convert_codepoint_error(state, exception))
-        elseif exception isa OverflowError
-            throw(_convert_overflow_error(state))
+        elseif exception isa Union{Base.CodePointError, OverflowError}
+            converted = _source_scanner_error(state, exception, catch_backtrace())
+            converted === nothing || throw(converted)
         end
         rethrow()
+    end
+end
+
+function _forward!(state::_EventIteratorState)
+    return _with_error_conversion(state) do
+        YAML.forward!(state.stream)
     end
 end
 
@@ -762,7 +929,7 @@ function _resume_after_explicit_document!(state::_EventIteratorState)
     # suffix markers without pretending the following document is the first
     # (and therefore potentially implicit) document in a new stream.
     state.stream.end_of_stream = nothing
-    try
+    _with_error_conversion(state) do
         while true
             state.tokenstream.done = false
             token = YAML.peek(state.tokenstream)
@@ -780,15 +947,6 @@ function _resume_after_explicit_document!(state::_EventIteratorState)
                               "expected '<document start>', but found $(typeof(token))",
                               problem_mark, nothing))
         end
-    catch exception
-        if exception isa Union{YAML.ScannerError, YAML.ParserError}
-            throw(_convert_error(state, exception))
-        elseif exception isa Base.CodePointError
-            throw(_convert_codepoint_error(state, exception))
-        elseif exception isa OverflowError
-            throw(_convert_overflow_error(state))
-        end
-        rethrow()
     end
 
     state.stream.state = YAML.parse_document_start
@@ -839,8 +997,9 @@ An `IO` input is read when the iterator is created, so seekable and forward-only
 streams are both supported. Invalid encoded input raises [`EncodingError`](@ref)
 while the iterator is created. Characters whose invalidity can be established
 during input validation raise [`ScannerError`](@ref) during the same step. Other
-YAML syntax errors raise [`ScannerError`](@ref) or [`ParserError`](@ref) as the
-iterator advances.
+malformed decoded YAML raises only [`ScannerError`](@ref) or [`ParserError`](@ref)
+as the iterator advances. Internal failures that cannot be attributed to source
+text are rethrown rather than converted to input errors.
 
 # Example
 
@@ -870,8 +1029,7 @@ function _parse_events(input::_PreparedInput)
                                mapping_tokenstream, 0, UInt64[], UInt64[],
                                firstindex(input.source), 0,
                                Dict{NTuple{3, UInt64}, Tuple{UInt64, UInt64}}(),
-                               Dict{NTuple{3, UInt64}, Tuple{String, Mark}}(), nothing,
-                               false, false)
+                               Dict{NTuple{3, UInt64}, Tuple{String, Mark}}(), false, false)
     state = _EventIteratorState(tokenstream, YAML.EventStream(tokenstream), converter,
                                 input.encoding, nothing, false)
     return YAMLEventIterator(state)
