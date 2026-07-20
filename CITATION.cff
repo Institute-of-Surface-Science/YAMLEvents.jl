@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use YAMLEvents.jl, please cite it using the metadata below."
+type: software
+title: YAMLEvents.jl
+abstract: >-
+  A Julia package for parsing YAML input into a forward-only stream of
+  syntax-preserving events.
+authors:
+  - family-names: Berger
+    given-names: Sven
+    affiliation: Institute of Surface Science, Helmholtz-Zentrum Hereon, Germany
+    orcid: "https://orcid.org/0000-0001-6083-7038"
+version: 0.1.1
+doi: 10.5281/zenodo.21428697
+repository-code: "https://github.com/Institute-of-Surface-Science/YAMLEvents.jl"
+url: "https://doi.org/10.5281/zenodo.21428697"
+license: MIT
+keywords:
+  - Julia
+  - YAML
+  - parser
+  - events
