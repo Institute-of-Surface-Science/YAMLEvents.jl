@@ -119,14 +119,16 @@ function _record_flow_breaks!(converter::_MarkConverter, source_index::Int,
     source = converter.source
     while true
         while source_index <= ncodeunits(source) && _is_inline_space(source[source_index])
-            source_index,
-            source_position = _advance_skipped!(converter, source_index, source_position,
-                                                backend_index)
+            source_index, source_position = _advance_skipped!(converter, source_index,
+                                                              source_position,
+                                                              backend_index)
         end
         if source_index <= ncodeunits(source) && _is_line_break(source[source_index])
-            source_index, source_position, backend_index,
-            line = _advance_normal(source, source_index, source_position, backend_index,
-                                   line)
+            source_index, source_position, backend_index, line = _advance_normal(source,
+                                                                                 source_index,
+                                                                                 source_position,
+                                                                                 backend_index,
+                                                                                 line)
         else
             return source_index, source_position, backend_index, line
         end
@@ -143,8 +145,11 @@ function _record_quoted_corrections!(converter::_MarkConverter, token::YAML.Scal
     source[source_index] == style || error("could not align YAML quoted scalar source")
     backend_index = start_mark.index
     line = start_mark.line
-    source_index, source_position, backend_index,
-    line = _advance_normal(source, source_index, source_position, backend_index, line)
+    source_index, source_position, backend_index, line = _advance_normal(source,
+                                                                         source_index,
+                                                                         source_position,
+                                                                         backend_index,
+                                                                         line)
 
     while source_index <= ncodeunits(source)
         char = source[source_index]
@@ -155,52 +160,62 @@ function _record_quoted_corrections!(converter::_MarkConverter, token::YAML.Scal
             break
         elseif _is_inline_space(char)
             while source_index <= ncodeunits(source) &&
-                _is_inline_space(source[source_index])
-                source_index, source_position, backend_index,
-                line = _advance_normal(source, source_index, source_position, backend_index,
-                                       line)
+                  _is_inline_space(source[source_index])
+                source_index, source_position, backend_index, line = _advance_normal(source,
+                                                                                     source_index,
+                                                                                     source_position,
+                                                                                     backend_index,
+                                                                                     line)
             end
             if source_index <= ncodeunits(source) && _is_line_break(source[source_index])
-                source_index, source_position, backend_index,
-                line = _advance_normal(source, source_index, source_position, backend_index,
-                                       line)
+                source_index, source_position, backend_index, line = _advance_normal(source,
+                                                                                     source_index,
+                                                                                     source_position,
+                                                                                     backend_index,
+                                                                                     line)
                 source_index, source_position, backend_index,
                 line = _record_flow_breaks!(converter, source_index, source_position,
                                             backend_index, line)
             end
         elseif _is_line_break(char)
-            source_index, source_position, backend_index,
-            line = _advance_normal(source, source_index, source_position, backend_index,
-                                   line)
+            source_index, source_position, backend_index, line = _advance_normal(source,
+                                                                                 source_index,
+                                                                                 source_position,
+                                                                                 backend_index,
+                                                                                 line)
             source_index, source_position, backend_index,
             line = _record_flow_breaks!(converter, source_index, source_position,
                                         backend_index, line)
         elseif style == '\'' && char == '\'' && next_char == '\''
-            source_index, source_position, backend_index,
-            line = _advance_normal(source, source_index, source_position, backend_index,
-                                   line)
-            source_index, source_position, backend_index,
-            line = _advance_normal(source, source_index, source_position, backend_index,
-                                   line)
+            source_index, source_position, backend_index, line = _advance_normal(source,
+                                                                                 source_index,
+                                                                                 source_position,
+                                                                                 backend_index,
+                                                                                 line)
+            source_index, source_position, backend_index, line = _advance_normal(source,
+                                                                                 source_index,
+                                                                                 source_position,
+                                                                                 backend_index,
+                                                                                 line)
         elseif (style == '"' && char == '\'') ||
                (style == '\'' && (char == '"' || char == '\\'))
-            source_index,
-            source_position = _advance_skipped!(converter, source_index, source_position,
-                                                backend_index)
+            source_index, source_position = _advance_skipped!(converter, source_index,
+                                                              source_position,
+                                                              backend_index)
         elseif style == '"' && char == '\\'
-            source_index,
-            source_position = _advance_skipped!(converter, source_index, source_position,
-                                                backend_index)
+            source_index, source_position = _advance_skipped!(converter, source_index,
+                                                              source_position,
+                                                              backend_index)
             escaped = source[source_index]
             if haskey(YAML.ESCAPE_REPLACEMENTS, escaped)
-                source_index,
-                source_position = _advance_skipped!(converter, source_index,
-                                                    source_position, backend_index)
+                source_index, source_position = _advance_skipped!(converter, source_index,
+                                                                  source_position,
+                                                                  backend_index)
             elseif haskey(YAML.ESCAPE_CODES, escaped)
                 digits = YAML.ESCAPE_CODES[escaped]
-                source_index,
-                source_position = _advance_skipped!(converter, source_index,
-                                                    source_position, backend_index)
+                source_index, source_position = _advance_skipped!(converter, source_index,
+                                                                  source_position,
+                                                                  backend_index)
                 escape_position = source_position
                 codepoint = UInt32(0)
                 for _ in 1:digits
@@ -219,9 +234,11 @@ function _record_quoted_corrections!(converter::_MarkConverter, token::YAML.Scal
                                                                                   escape_position)))
                 end
             elseif _is_line_break(escaped)
-                source_index, source_position, backend_index,
-                line = _advance_normal(source, source_index, source_position, backend_index,
-                                       line)
+                source_index, source_position, backend_index, line = _advance_normal(source,
+                                                                                     source_index,
+                                                                                     source_position,
+                                                                                     backend_index,
+                                                                                     line)
                 source_index, source_position, backend_index,
                 line = _record_flow_breaks!(converter, source_index, source_position,
                                             backend_index, line)
@@ -229,15 +246,20 @@ function _record_quoted_corrections!(converter::_MarkConverter, token::YAML.Scal
                 error("could not align YAML double-quoted escape")
             end
         else
-            source_index, source_position, backend_index,
-            line = _advance_normal(source, source_index, source_position, backend_index,
-                                   line)
+            source_index, source_position, backend_index, line = _advance_normal(source,
+                                                                                 source_index,
+                                                                                 source_position,
+                                                                                 backend_index,
+                                                                                 line)
         end
     end
 
     source_index <= ncodeunits(source) || error("unterminated YAML quoted scalar")
-    source_index, source_position, backend_index,
-    line = _advance_normal(source, source_index, source_position, backend_index, line)
+    source_index, source_position, backend_index, line = _advance_normal(source,
+                                                                         source_index,
+                                                                         source_position,
+                                                                         backend_index,
+                                                                         line)
     backend_index == end_mark.index || error("could not align YAML quoted scalar mark")
     converter.source_cursor = source_index
     converter.source_position = source_position
@@ -259,13 +281,15 @@ function _record_uri_corrections!(converter::_MarkConverter, token;
         source_index <= ncodeunits(source) || error("could not align YAML tag source")
         char = source[source_index]
         if char == '%' && !(initial_percent_is_normal && first_character)
-            source_index,
-            source_position = _advance_skipped!(converter, source_index, source_position,
-                                                backend_index)
+            source_index, source_position = _advance_skipped!(converter, source_index,
+                                                              source_position,
+                                                              backend_index)
         else
-            source_index, source_position, backend_index,
-            line = _advance_normal(source, source_index, source_position, backend_index,
-                                   line)
+            source_index, source_position, backend_index, line = _advance_normal(source,
+                                                                                 source_index,
+                                                                                 source_position,
+                                                                                 backend_index,
+                                                                                 line)
         end
         first_character = false
     end
@@ -309,8 +333,8 @@ function _context_characters(input::_PreparedInput)
             codepoint = UInt32(char)
             quoted_character = codepoint == 0x09 || 0x20 <= codepoint <= 0x10ffff
             quoted_character || throw(ScannerError(nothing, nothing,
-                               "found non-printable character $(_codepoint_name(char))",
-                               mark))
+                                      "found non-printable character $(_codepoint_name(char))",
+                                      mark))
             # An initial BOM is unambiguously the stream encoding prefix. Avoid
             # tokenizing an otherwise ordinary BOM-prefixed document.
             char == '\ufeff' && position == 0 ||
@@ -329,9 +353,10 @@ function _context_characters(input::_PreparedInput)
 end
 
 function _validation_converter(input::_PreparedInput)
-    return _MarkConverter(input.source, input.newline_corrections, input.character_count,
-                          nothing, nothing, 0, UInt64[], UInt64[], firstindex(input.source),
-                          0, Dict{NTuple{3, UInt64}, Tuple{UInt64, UInt64}}(),
+    return _MarkConverter(input.source, input.newline_corrections,
+                          input.character_count, nothing, nothing, 0, UInt64[], UInt64[],
+                          firstindex(input.source), 0,
+                          Dict{NTuple{3, UInt64}, Tuple{UInt64, UInt64}}(),
                           Dict{NTuple{3, UInt64}, Tuple{String, Mark}}(), false, false)
 end
 
@@ -430,8 +455,8 @@ function _validate_source_characters(input::_PreparedInput)
         scanned_position = max(scanned_position, end_position)
 
         if token isa YAML.ScalarToken && token.style in ('\'', '"')
-            _resolve_quoted_characters!(resolved, characters, positions, start_position,
-                                        end_position)
+            _resolve_quoted_characters!(resolved, characters, positions,
+                                        start_position, end_position)
         end
 
         if token isa YAML.StreamStartToken
@@ -510,6 +535,17 @@ function _source_line_column(source::String, target_position::UInt64)
     return line, column
 end
 
+function _source_index_at_position(source::String, source_position::UInt64)
+    source_position <= length(source) || return nothing
+    return nextind(source, 0, Int(source_position) + 1)
+end
+
+function _source_position_at_index(source::String, source_index::Int)
+    source_index == firstindex(source) && return UInt64(0)
+    preceding = SubString(source, firstindex(source), prevind(source, source_index))
+    return UInt64(length(preceding))
+end
+
 function _mark_at_source_position(converter::_MarkConverter, source_position::UInt64)
     correction_count = searchsortedlast(converter.newline_corrections, source_position)
     line, column = _source_line_column(converter.source, source_position)
@@ -527,6 +563,24 @@ function _record_error_override!(converter::_MarkConverter, exception::YAML.Scan
     return nothing
 end
 
+function _yaml_scanner_frame(backtrace, function_name::Symbol)
+    scanner_path = normpath(joinpath(dirname(pathof(YAML)), "scanner.jl"))
+    return any(stacktrace(backtrace)) do frame
+        frame.func === function_name || return false
+        return normpath(String(frame.file)) == scanner_path
+    end
+end
+
+function _scanner_conversion_kind(exception, backtrace)
+    if exception isa Base.CodePointError
+        _yaml_scanner_frame(backtrace, :scan_flow_scalar_non_spaces) && return :unicode
+    elseif exception isa OverflowError
+        _yaml_scanner_frame(backtrace, :scan_yaml_directive_number) && return :directive
+        _yaml_scanner_frame(backtrace, :scan_flow_scalar_non_spaces) && return :unicode
+    end
+    return nothing
+end
+
 function _next_mapping_token!(converter::_MarkConverter)
     while true
         token = try
@@ -539,6 +593,8 @@ function _next_mapping_token!(converter::_MarkConverter)
                 converter.done = true
                 return nothing
             elseif exception isa Union{Base.CodePointError, OverflowError}
+                _scanner_conversion_kind(exception, catch_backtrace()) === nothing &&
+                    rethrow()
                 converter.done = true
                 return nothing
             end
@@ -713,105 +769,121 @@ end
 # YAML.jl 0.4.16 also parses a one-digit block-scalar indentation indicator
 # and two-digit tag URI escapes. Those conversions are bounded; only directive
 # components and Unicode-to-Char conversion require source-error normalization.
-function _escaped_codepoint(characters::Vector{Char}, first_digit::Int, digits::Int)
-    last_digit = first_digit + digits - 1
-    last_digit <= length(characters) || return nothing
+function _escaped_codepoint(source::String, first_digit::Int, digits::Int)
+    index = first_digit
     codepoint = UInt32(0)
-    for index in first_digit:last_digit
-        digit = _ascii_hex_value(characters[index])
+    for _ in 1:digits
+        index <= ncodeunits(source) || return nothing
+        digit = _ascii_hex_value(source[index])
         digit === nothing && return nothing
         codepoint = UInt32(16) * codepoint + digit
+        index = nextind(source, index)
     end
     return codepoint
 end
 
-function _opening_double_quote(characters::Vector{Char}, before::Int)
-    for quote_index in (before - 1):-1:firstindex(characters)
-        characters[quote_index] == '"' || continue
+function _opening_double_quote(source::String, before::Int)
+    quote_index = prevind(source, before)
+    while quote_index >= firstindex(source)
+        if source[quote_index] != '"'
+            quote_index = prevind(source, quote_index)
+            continue
+        end
         preceding_backslashes = 0
-        index = quote_index - 1
-        while index >= firstindex(characters) && characters[index] == '\\'
+        index = prevind(source, quote_index)
+        while index >= firstindex(source) && source[index] == '\\'
             preceding_backslashes += 1
-            index -= 1
+            index = prevind(source, index)
         end
         iseven(preceding_backslashes) && return quote_index
+        quote_index = index
     end
     return nothing
 end
 
-function _unicode_escape_error(state::_EventIteratorState, exception::Base.CodePointError,
-                               source_position::UInt64)
+function _unicode_escape_error(state::_EventIteratorState,
+                               exception::Union{Base.CodePointError, OverflowError},
+                               source_position::UInt64,
+                               integer_maximum::Integer = typemax(Int))
     converter = state.mark_converter
-    characters = collect(converter.source)
-    first_digit = Int(source_position) + 1
-    escape_code_index = first_digit - 1
-    backslash_index = escape_code_index - 1
-    backslash_index >= firstindex(characters) || return nothing
-    characters[backslash_index] == '\\' || return nothing
-    escape_code = characters[escape_code_index]
+    source = converter.source
+    first_digit = _source_index_at_position(source, source_position)
+    first_digit === nothing && return nothing
+    first_digit > firstindex(source) || return nothing
+    escape_code_index = prevind(source, first_digit)
+    escape_code_index > firstindex(source) || return nothing
+    backslash_index = prevind(source, escape_code_index)
+    backslash_index >= firstindex(source) || return nothing
+    source[backslash_index] == '\\' || return nothing
+    escape_code = source[escape_code_index]
     digits = get(YAML.ESCAPE_CODES, escape_code, nothing)
     digits === nothing && return nothing
-    codepoint = _escaped_codepoint(characters, first_digit, digits)
+    codepoint = _escaped_codepoint(source, first_digit, digits)
     codepoint === nothing && return nothing
-    exception.code == codepoint || return nothing
     isvalid(Char, codepoint) && return nothing
+    if exception isa Base.CodePointError
+        exception.code == codepoint || return nothing
+    else
+        codepoint > integer_maximum || return nothing
+    end
 
-    quote_index = _opening_double_quote(characters, backslash_index)
+    quote_index = _opening_double_quote(source, backslash_index)
     quote_index === nothing && return nothing
-    context_position = UInt64(quote_index - 1)
+    context_position = _source_position_at_index(source, quote_index)
     return ScannerError("while scanning a double-quoted scalar",
                         _mark_at_source_position(converter, context_position),
                         "escape sequence contains invalid Unicode code point $(_unicode_codepoint_name(codepoint))",
                         _mark_at_source_position(converter, source_position))
 end
 
-function _line_start_index(characters::Vector{Char}, position::Int)
-    index = position - 1
-    while index >= firstindex(characters)
-        _is_line_break(characters[index]) && return index + 1
-        index -= 1
+function _line_start_index(source::String, position::Int)
+    index = prevind(source, position)
+    while index >= firstindex(source)
+        _is_line_break(source[index]) && return nextind(source, index)
+        index = prevind(source, index)
     end
-    return firstindex(characters)
+    return firstindex(source)
 end
 
-function _yaml_directive_component(characters::Vector{Char}, first_digit::Int)
-    directive_index = _line_start_index(characters, first_digit)
-    characters[directive_index] == '\ufeff' && (directive_index += 1)
-    directive_index + 4 <= length(characters) || return nothing
-    characters[directive_index:(directive_index + 4)] == collect("%YAML") || return nothing
+function _yaml_directive_component(source::String, first_digit::Int)
+    directive_index = _line_start_index(source, first_digit)
+    source[directive_index] == '\ufeff' &&
+        (directive_index = nextind(source, directive_index))
+    startswith(SubString(source, directive_index), "%YAML") || return nothing
 
-    index = directive_index + 5
-    while index <= length(characters) && characters[index] in (' ', ':')
-        index += 1
+    index = nextind(source, directive_index, 5)
+    while index <= ncodeunits(source) && source[index] in (' ', ':')
+        index = nextind(source, index)
     end
     major_start = index
-    while index <= length(characters) && '0' <= characters[index] <= '9'
-        index += 1
+    while index <= ncodeunits(source) && '0' <= source[index] <= '9'
+        index = nextind(source, index)
     end
     if first_digit != major_start
-        index <= length(characters) && characters[index] == '.' || return nothing
-        index += 1
+        index <= ncodeunits(source) && source[index] == '.' || return nothing
+        index = nextind(source, index)
         first_digit == index || return nothing
     end
 
     last_digit = first_digit
-    while last_digit <= length(characters) && '0' <= characters[last_digit] <= '9'
-        last_digit += 1
+    while last_digit <= ncodeunits(source) && '0' <= source[last_digit] <= '9'
+        last_digit = nextind(source, last_digit)
     end
     last_digit > first_digit || return nothing
-    component = join(characters[first_digit:(last_digit - 1)])
+    component = SubString(source, first_digit, prevind(source, last_digit))
     tryparse(Int, component) === nothing || return nothing
     return directive_index
 end
 
 function _directive_overflow_error(state::_EventIteratorState, source_position::UInt64)
     converter = state.mark_converter
-    characters = collect(converter.source)
-    first_digit = Int(source_position) + 1
-    first_digit <= length(characters) || return nothing
-    directive_index = _yaml_directive_component(characters, first_digit)
+    source = converter.source
+    first_digit = _source_index_at_position(source, source_position)
+    first_digit === nothing && return nothing
+    first_digit <= ncodeunits(source) || return nothing
+    directive_index = _yaml_directive_component(source, first_digit)
     directive_index === nothing && return nothing
-    context_position = UInt64(directive_index - 1)
+    context_position = _source_position_at_index(source, directive_index)
     return ScannerError("while scanning a directive",
                         _mark_at_source_position(converter, context_position),
                         "YAML directive contains an integer that is too large",
@@ -819,10 +891,13 @@ function _directive_overflow_error(state::_EventIteratorState, source_position::
 end
 
 function _source_scanner_error(state::_EventIteratorState,
-                               exception::Union{Base.CodePointError, OverflowError})
+                               exception::Union{Base.CodePointError, OverflowError},
+                               backtrace)
+    kind = _scanner_conversion_kind(exception, backtrace)
+    kind === nothing && return nothing
     source_position = _source_scanner_position(state)
     source_position === nothing && return nothing
-    if exception isa Base.CodePointError
+    if kind === :unicode
         return _unicode_escape_error(state, exception, source_position)
     end
     return _directive_overflow_error(state, source_position)
@@ -835,7 +910,7 @@ function _with_error_conversion(operation, state::_EventIteratorState)
         if exception isa Union{YAML.ScannerError, YAML.ParserError}
             throw(_convert_error(state, exception))
         elseif exception isa Union{Base.CodePointError, OverflowError}
-            converted = _source_scanner_error(state, exception)
+            converted = _source_scanner_error(state, exception, catch_backtrace())
             converted === nothing || throw(converted)
         end
         rethrow()

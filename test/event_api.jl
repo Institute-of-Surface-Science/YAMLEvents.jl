@@ -363,11 +363,29 @@ mark_coordinates(mark) = (mark.index, mark.line, mark.column)
     @test any(event -> event isa YAMLEvents.ScalarEvent && event.value == "text\n",
               block_scalar_events)
 
-    unrelated_iterator = YAMLEvents.parse_events("value: \"%\"\n")
-    @test YAMLEvents._source_scanner_error(unrelated_iterator._state,
-                                           OverflowError("sentinel")) === nothing
-    @test YAMLEvents._source_scanner_error(unrelated_iterator._state,
-                                           Base.CodePointError(0xffffffff)) === nothing
+    simulated_32_bit_state = YAMLEvents.parse_events("value: \"\\UFFFFFFFF\"\n")._state
+    simulated_32_bit_error = YAMLEvents._unicode_escape_error(simulated_32_bit_state,
+                                                              OverflowError("32-bit"),
+                                                              UInt64(10), typemax(Int32))
+    @test simulated_32_bit_error isa YAMLEvents.ScannerError
+    @test occursin("U+FFFFFFFF", simulated_32_bit_error.problem)
+    @test YAMLEvents._unicode_escape_error(simulated_32_bit_state,
+                                           OverflowError("unrelated"), UInt64(10),
+                                           typemax(Int64)) === nothing
+
+    unrelated_iterator = YAMLEvents.parse_events("%YAML $oversized_component.1\n---\na\n")
+    for _ in 1:6
+        YAMLEvents.YAML.forward!(unrelated_iterator._state.tokenstream.input)
+    end
+    unrelated_error = try
+        YAMLEvents._with_error_conversion(unrelated_iterator._state) do
+            throw(OverflowError("sentinel"))
+        end
+    catch exception
+        exception
+    end
+    @test unrelated_error isa OverflowError
+    @test unrelated_error.msg == "sentinel"
 
     warning_source = "%FOO bar\n--- value"
     @test_logs (:warn, r"unknown directive name: \"FOO\"") begin
