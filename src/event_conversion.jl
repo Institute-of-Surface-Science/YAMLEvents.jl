@@ -8,6 +8,7 @@ mutable struct _EventIteratorState
     encoding::String
     unknown_directive_mode::Symbol
     directive_prologue_scanned::Bool
+    next_unknown_directive::Int
     previous_backend_event::Union{Event, Nothing}
     done::Bool
 end

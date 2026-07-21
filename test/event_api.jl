@@ -442,6 +442,23 @@ mark_coordinates(mark) = (mark.index, mark.line, mark.column)
                               if event isa YAMLEvents.DocumentStartEvent)
         @test mixed_document.version == (1, 1)
 
+        incremental_source = "%FIRST one\n%SECOND two\n---\nvalue\n"
+        incremental_iterator = YAMLEvents.parse_events(incremental_source)
+        @test first(iterate(incremental_iterator)) isa YAMLEvents.StreamStartEvent
+        first_directive = first(iterate(incremental_iterator))
+        @test first_directive isa YAMLEvents.UnknownDirectiveEvent
+        @test first_directive.name == "FIRST"
+        @test isempty(incremental_iterator._state.mark_converter.unknown_directives)
+        @test incremental_iterator._state.mark_converter.source_position ==
+              length("%FIRST one")
+        @test !incremental_iterator._state.directive_prologue_scanned
+        second_directive = first(iterate(incremental_iterator))
+        @test second_directive isa YAMLEvents.UnknownDirectiveEvent
+        @test second_directive.name == "SECOND"
+        @test isempty(incremental_iterator._state.mark_converter.unknown_directives)
+        @test incremental_iterator._state.mark_converter.source_position ==
+              length("%FIRST one\n%SECOND two")
+
         known_source = "%YAML 1.1\n%TAG !e! tag:example.com,2026:\n---\n!e!item value\n"
         known_events = collect(YAMLEvents.parse_events(known_source;
                                                        unknown_directives = :error))

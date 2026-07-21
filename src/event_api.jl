@@ -20,27 +20,45 @@ function _at_directive_prologue(state::_EventIteratorState)
            parser_state === YAML.parse_document_start
 end
 
+function _has_unknown_directive(state::_EventIteratorState)
+    return state.next_unknown_directive <=
+           length(state.mark_converter.unknown_directives)
+end
+
 function _scan_directive_prologue!(state::_EventIteratorState)
     state.directive_prologue_scanned && return nothing
     converter = state.mark_converter
     converter.tokenstream === nothing && return nothing
     _at_directive_prologue(state) || return nothing
 
-    while true
+    # Stop as soon as there is an event to yield. Apart from preserving the
+    # iterator's lazy contract, this bounds the pending-directive buffer instead
+    # of tokenizing an arbitrarily large prologue up front.
+    while !_has_unknown_directive(state)
         token = _next_mapping_token!(converter)
-        token === nothing && break
+        if token === nothing
+            state.directive_prologue_scanned = true
+            break
+        end
         _record_mapping_token!(converter, token)
-        token isa Union{YAML.StreamStartToken, YAML.ByteOrderMarkToken,
-                        YAML.DocumentEndToken, YAML.DirectiveToken} || break
+        if !(token isa Union{YAML.StreamStartToken, YAML.ByteOrderMarkToken,
+                             YAML.DocumentEndToken, YAML.DirectiveToken})
+            state.directive_prologue_scanned = true
+            break
+        end
     end
-    state.directive_prologue_scanned = true
     return nothing
 end
 
 function _next_unknown_directive!(state::_EventIteratorState)
     directives = state.mark_converter.unknown_directives
-    isempty(directives) && return nothing
-    event = popfirst!(directives)
+    _has_unknown_directive(state) || return nothing
+    event = directives[state.next_unknown_directive]
+    state.next_unknown_directive += 1
+    if state.next_unknown_directive > length(directives)
+        empty!(directives)
+        state.next_unknown_directive = 1
+    end
     if state.unknown_directive_mode === :error
         state.done = true
         throw(ScannerError("while scanning a directive", event.start_mark,
@@ -182,7 +200,7 @@ function _parse_events(input::_PreparedInput, unknown_directives::Symbol)
                                Dict{NTuple{3, UInt64}, Tuple{String, Mark}}(),
                                UnknownDirectiveEvent[], false, false)
     state = _EventIteratorState(tokenstream, YAML.EventStream(tokenstream), converter,
-                                input.encoding, unknown_directives, false, nothing, false)
+                                input.encoding, unknown_directives, false, 1, nothing, false)
     return YAMLEventIterator(state)
 end
 

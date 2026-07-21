@@ -279,14 +279,16 @@ function _record_unknown_directive!(converter::_MarkConverter,
     source = converter.source
     start_position = _normalized_index(converter, YAML.firstmark(token).index)
     content_position = _normalized_index(converter, YAML.lastmark(token).index)
-    content_index = _source_index_at_position(source, content_position)
-    content_index === nothing && error("could not align YAML directive source")
+    content_index = _source_index!(converter, content_position)
 
     end_index = content_index
+    end_position = content_position
     while end_index <= ncodeunits(source) && !_is_line_break(source[end_index])
         end_index = nextind(source, end_index)
+        end_position += 1
     end
-    end_position = _source_position_at_index(source, end_index)
+    converter.source_cursor = end_index
+    converter.source_position = end_position
     content = if content_index == end_index
         ""
     else
@@ -365,7 +367,12 @@ end
 
 function _mark_at_source_position(converter::_MarkConverter, source_position::UInt64)
     correction_count = searchsortedlast(converter.newline_corrections, source_position)
-    line, column = _source_line_column(converter.source, source_position)
+    line, column = if converter.line_start_positions === nothing
+        _source_line_column(converter.source, source_position)
+    else
+        line_index = searchsortedlast(converter.line_start_positions, source_position)
+        UInt64(line_index), source_position - converter.line_start_positions[line_index]
+    end
     return Mark(source_position + UInt64(correction_count), line, column)
 end
 
