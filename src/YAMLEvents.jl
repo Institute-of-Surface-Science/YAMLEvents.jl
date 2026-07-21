@@ -25,6 +25,9 @@ include("mark.jl")
 include("events.jl")
 include("errors.jl")
 include("input.jl")
+include("mark_conversion.jl")
+include("source_validation.jl")
+include("event_conversion.jl")
 include("event_api.jl")
 
 end # module YAMLEvents
