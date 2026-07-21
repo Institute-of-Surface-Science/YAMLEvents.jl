@@ -15,6 +15,7 @@ mutable struct _MarkConverter
     source_position::UInt64
     mark_overrides::Dict{NTuple{3, UInt64}, Tuple{UInt64, UInt64}}
     scalar_errors::Dict{NTuple{3, UInt64}, Tuple{String, Mark}}
+    unknown_directives::Vector{UnknownDirectiveEvent}
     reset_pending::Bool
     done::Bool
 end
@@ -272,6 +273,33 @@ function _record_uri_corrections!(converter::_MarkConverter, token;
     return nothing
 end
 
+function _record_unknown_directive!(converter::_MarkConverter,
+                                    token::YAML.DirectiveToken)
+    converter.tokenstream === nothing && return nothing
+    source = converter.source
+    start_position = _normalized_index(converter, YAML.firstmark(token).index)
+    content_position = _normalized_index(converter, YAML.lastmark(token).index)
+    content_index = _source_index_at_position(source, content_position)
+    content_index === nothing && error("could not align YAML directive source")
+
+    end_index = content_index
+    while end_index <= ncodeunits(source) && !_is_line_break(source[end_index])
+        end_index = nextind(source, end_index)
+    end
+    end_position = _source_position_at_index(source, end_index)
+    content = if content_index == end_index
+        ""
+    else
+        String(SubString(source, content_index, prevind(source, end_index)))
+    end
+
+    push!(converter.unknown_directives,
+          UnknownDirectiveEvent(_mark_at_source_position(converter, start_position),
+                                _mark_at_source_position(converter, end_position),
+                                token.name, content))
+    return nothing
+end
+
 function _record_token_corrections!(converter::_MarkConverter, token)
     if token isa YAML.ByteOrderMarkToken
         end_mark = YAML.lastmark(token)
@@ -282,6 +310,8 @@ function _record_token_corrections!(converter::_MarkConverter, token)
         _record_uri_corrections!(converter, token)
     elseif token isa YAML.DirectiveToken && token.name == "TAG"
         _record_uri_corrections!(converter, token; initial_percent_is_normal = true)
+    elseif token isa YAML.DirectiveToken && token.name != "YAML"
+        _record_unknown_directive!(converter, token)
     end
     return nothing
 end
@@ -401,13 +431,18 @@ function _next_mapping_token!(converter::_MarkConverter)
     end
 end
 
+function _record_mapping_token!(converter::_MarkConverter, token)
+    _record_token_corrections!(converter, token)
+    end_mark = YAML.lastmark(token)
+    converter.scanned_index = max(converter.scanned_index, end_mark.index)
+    return nothing
+end
+
 function _scan_mark_mapping!(converter::_MarkConverter, backend_index::UInt64)
     while !converter.done && converter.scanned_index < backend_index
         token = _next_mapping_token!(converter)
         token === nothing && break
-        _record_token_corrections!(converter, token)
-        end_mark = YAML.lastmark(token)
-        converter.scanned_index = max(converter.scanned_index, end_mark.index)
+        _record_mapping_token!(converter, token)
     end
     return nothing
 end

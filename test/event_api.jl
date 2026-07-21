@@ -25,6 +25,7 @@ mark_coordinates(mark) = (mark.index, mark.line, mark.column)
     @test eltype(iterator) === YAMLEvents.Event
     @test parentmodule(YAMLEvents.Event) === YAMLEvents
     @test parentmodule(YAMLEvents.Mark) === YAMLEvents
+    @test parentmodule(YAMLEvents.UnknownDirectiveEvent) === YAMLEvents
     @test parentmodule(YAMLEvents.EncodingError) === YAMLEvents
     @test parentmodule(YAMLEvents.ScannerError) === YAMLEvents
 
@@ -387,8 +388,120 @@ mark_coordinates(mark) = (mark.index, mark.line, mark.column)
     @test unrelated_error isa OverflowError
     @test unrelated_error.msg == "sentinel"
 
-    warning_source = "%FOO bar\n--- value"
-    @test_logs (:warn, r"unknown directive name: \"FOO\"") begin
-        collect(YAMLEvents.parse_events(warning_source))
+    @testset "Unknown directives" begin
+        directive_source = "%FOO café # note\r\n---\r\nvalue\r\n"
+        directive_events = @test_logs min_level = Logging.Warn begin
+            collect(YAMLEvents.parse_events(directive_source))
+        end
+        directive = only(event
+                         for event in directive_events
+                         if event isa YAMLEvents.UnknownDirectiveEvent)
+        @test directive.name == "FOO"
+        @test directive.content == " café # note"
+        @test mark_coordinates(directive.start_mark) == (0, 1, 0)
+        directive_length = length("%FOO café # note")
+        @test mark_coordinates(directive.end_mark) ==
+              (directive_length, 1, directive_length)
+        @test typeof.(directive_events[1:3]) ==
+              [YAMLEvents.StreamStartEvent, YAMLEvents.UnknownDirectiveEvent,
+               YAMLEvents.DocumentStartEvent]
+        value = only(event
+                     for event in directive_events
+                     if event isa YAMLEvents.ScalarEvent && event.value == "value")
+        @test mark_coordinates(value.start_mark) == (23, 3, 0)
+
+        encoded_source = "%ENCODED café\n---\nvalue\n"
+        for encoding in ("UTF-16LE", "UTF-32BE")
+            encoded_events = collect(YAMLEvents.parse_events(IOBuffer(encode(encoded_source,
+                                                                              encoding))))
+            encoded_directive = only(event
+                                     for event in encoded_events
+                                     if event isa YAMLEvents.UnknownDirectiveEvent)
+            @test encoded_directive.name == "ENCODED"
+            @test encoded_directive.content == " café"
+            @test mark_coordinates(encoded_directive.start_mark) == (0, 1, 0)
+            @test mark_coordinates(encoded_directive.end_mark) == (13, 1, 13)
+        end
+
+        empty_directive = only(event
+                               for event in YAMLEvents.parse_events("%EMPTY\n---\nvalue\n")
+                               if event isa YAMLEvents.UnknownDirectiveEvent)
+        @test empty_directive.name == "EMPTY"
+        @test isempty(empty_directive.content)
+        @test mark_coordinates(empty_directive.end_mark) == (6, 1, 6)
+
+        mixed_source = "%FOO first\n%YAML 1.1\n%BAR second  \n---\nvalue\n"
+        mixed_events = collect(YAMLEvents.parse_events(mixed_source))
+        mixed_directives = [event
+                            for event in mixed_events
+                            if event isa YAMLEvents.UnknownDirectiveEvent]
+        @test getproperty.(mixed_directives, :name) == ["FOO", "BAR"]
+        @test getproperty.(mixed_directives, :content) == [" first", " second  "]
+        mixed_document = only(event
+                              for event in mixed_events
+                              if event isa YAMLEvents.DocumentStartEvent)
+        @test mixed_document.version == (1, 1)
+
+        known_source = "%YAML 1.1\n%TAG !e! tag:example.com,2026:\n---\n!e!item value\n"
+        known_events = collect(YAMLEvents.parse_events(known_source;
+                                                       unknown_directives = :error))
+        @test !any(event -> event isa YAMLEvents.UnknownDirectiveEvent, known_events)
+        known_document = only(event
+                              for event in known_events
+                              if event isa YAMLEvents.DocumentStartEvent)
+        @test known_document.version == (1, 1)
+        @test known_document.tags == Dict("!e!" => "tag:example.com,2026:")
+
+        between_source = "first\n...\n%LATER next\n---\nsecond\n"
+        between_events = @test_logs min_level = Logging.Warn begin
+            collect(YAMLEvents.parse_events(between_source))
+        end
+        later_index = findfirst(event -> event isa YAMLEvents.UnknownDirectiveEvent,
+                                between_events)
+        preceding_end = findprev(event -> event isa YAMLEvents.DocumentEndEvent,
+                                 between_events, later_index)
+        following_start = findnext(event -> event isa YAMLEvents.DocumentStartEvent,
+                                   between_events, later_index)
+        @test preceding_end < later_index < following_start
+        @test between_events[later_index].name == "LATER"
+
+        missing_start_iterator = YAMLEvents.parse_events("%FOO data\nvalue\n")
+        @test first(iterate(missing_start_iterator)) isa YAMLEvents.StreamStartEvent
+        @test first(iterate(missing_start_iterator)) isa YAMLEvents.UnknownDirectiveEvent
+        @test_throws YAMLEvents.ParserError iterate(missing_start_iterator)
+
+        strict_source = "%STRICT rejected\n---\nvalue\n"
+        strict_error = @test_logs min_level = Logging.Warn begin
+            try
+                collect(YAMLEvents.parse_events(strict_source;
+                                                unknown_directives = :error))
+                nothing
+            catch exception
+                exception
+            end
+        end
+        @test strict_error isa YAMLEvents.ScannerError
+        @test strict_error.context == "while scanning a directive"
+        @test strict_error.problem == "found unknown directive \"STRICT\""
+        @test mark_coordinates(strict_error.context_mark) == (0, 1, 0)
+        @test mark_coordinates(strict_error.problem_mark) == (0, 1, 0)
+
+        lazy_strict = YAMLEvents.parse_events(between_source;
+                                              unknown_directives = :error)
+        while true
+            event = first(iterate(lazy_strict))
+            event isa YAMLEvents.DocumentEndEvent && event.explicit && break
+        end
+        @test_throws YAMLEvents.ScannerError iterate(lazy_strict)
+
+        @test_logs (:warn, "unrelated warning") begin
+            collect(YAMLEvents.parse_events("%FOO data\n---\nvalue\n"))
+            @warn "unrelated warning"
+        end
+
+        @test_throws ArgumentError YAMLEvents.parse_events("value\n";
+                                                           unknown_directives = :ignore)
+        @test_throws ArgumentError YAMLEvents.parse_events(IOBuffer("value\n");
+                                                           unknown_directives = false)
     end
 end
