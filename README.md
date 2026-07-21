@@ -67,6 +67,21 @@ An `IO` input is buffered when `parse_events` is called. This allows pipes and
 other non-seekable streams to be used and means the input may be closed before
 iteration starts. Each event iterator is forward-only and may be consumed once.
 
+## Examples
+
+Runnable examples are available in [`examples/`](examples):
+
+- [`simplest.jl`](examples/simplest.jl) prints the events from a minimal mapping;
+- [`compare_yaml_jl.jl`](examples/compare_yaml_jl.jl) implements the same
+  syntax-aware query using YAML.jl's internal event stream and YAMLEvents.jl's
+  iterator API, highlighting the simpler YAMLEvents.jl implementation.
+
+Run either example from the repository root with, for example:
+
+```sh
+julia --project=. examples/simplest.jl
+```
+
 ## Event model
 
 Every event is a subtype of `Event` and has `start_mark` and `end_mark` fields.
