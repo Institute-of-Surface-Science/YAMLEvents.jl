@@ -3,7 +3,7 @@
 
 Parse YAML input into a stream of syntactic events without constructing Julia
 values. Events retain document boundaries, source positions, scalar and
-collection styles, tags, anchors, and aliases.
+collection styles, directives, tags, anchors, and aliases.
 """
 module YAMLEvents
 
@@ -16,6 +16,7 @@ export YAMLEventIterator
 export Event, Mark
 export StreamStartEvent, StreamEndEvent
 export DocumentStartEvent, DocumentEndEvent
+export UnknownDirectiveEvent
 export AliasEvent, ScalarEvent
 export SequenceStartEvent, SequenceEndEvent
 export MappingStartEvent, MappingEndEvent

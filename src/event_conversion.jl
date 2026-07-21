@@ -6,7 +6,10 @@ mutable struct _EventIteratorState
     stream::YAML.EventStream
     mark_converter::_MarkConverter
     encoding::String
-    previous_event::Union{Event, Nothing}
+    unknown_directive_mode::Symbol
+    directive_prologue_scanned::Bool
+    next_unknown_directive::Int
+    previous_backend_event::Union{Event, Nothing}
     done::Bool
 end
 
@@ -289,15 +292,17 @@ function _source_scanner_error(state::_EventIteratorState,
 end
 
 function _with_error_conversion(operation, state::_EventIteratorState)
-    try
-        return operation()
-    catch exception
-        if exception isa Union{YAML.ScannerError, YAML.ParserError}
-            throw(_convert_error(state, exception))
-        elseif exception isa Union{Base.CodePointError, OverflowError}
-            converted = _source_scanner_error(state, exception, catch_backtrace())
-            converted === nothing || throw(converted)
+    return Logging.with_logger(Logging.NullLogger()) do
+        try
+            return operation()
+        catch exception
+            if exception isa Union{YAML.ScannerError, YAML.ParserError}
+                throw(_convert_error(state, exception))
+            elseif exception isa Union{Base.CodePointError, OverflowError}
+                converted = _source_scanner_error(state, exception, catch_backtrace())
+                converted === nothing || throw(converted)
+            end
+            rethrow()
         end
-        rethrow()
     end
 end

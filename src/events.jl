@@ -26,6 +26,20 @@ struct DocumentEndEvent <: Event
     explicit::Bool
 end
 
+"""
+An unknown directive retained as source syntax.
+
+`content` is the exact, untrimmed text after the directive name and before the
+line break. The complete directive line is therefore
+`"%" * event.name * event.content`.
+"""
+struct UnknownDirectiveEvent <: Event
+    start_mark::Mark
+    end_mark::Mark
+    name::String
+    content::String
+end
+
 struct AliasEvent <: Event
     start_mark::Mark
     end_mark::Mark

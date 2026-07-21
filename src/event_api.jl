@@ -14,6 +14,60 @@ Base.IteratorSize(::Type{YAMLEventIterator}) = Base.SizeUnknown()
 Base.IteratorEltype(::Type{YAMLEventIterator}) = Base.HasEltype()
 Base.eltype(::Type{YAMLEventIterator}) = Event
 
+function _at_directive_prologue(state::_EventIteratorState)
+    parser_state = state.stream.state
+    return parser_state === YAML.parse_implicit_document_start ||
+           parser_state === YAML.parse_document_start
+end
+
+function _has_unknown_directive(state::_EventIteratorState)
+    return state.next_unknown_directive <=
+           length(state.mark_converter.unknown_directives)
+end
+
+function _scan_directive_prologue!(state::_EventIteratorState)
+    state.directive_prologue_scanned && return nothing
+    converter = state.mark_converter
+    converter.tokenstream === nothing && return nothing
+    _at_directive_prologue(state) || return nothing
+
+    # Stop as soon as there is an event to yield. Apart from preserving the
+    # iterator's lazy contract, this bounds the pending-directive buffer instead
+    # of tokenizing an arbitrarily large prologue up front.
+    while !_has_unknown_directive(state)
+        token = _next_mapping_token!(converter)
+        if token === nothing
+            state.directive_prologue_scanned = true
+            break
+        end
+        _record_mapping_token!(converter, token)
+        if !(token isa Union{YAML.StreamStartToken, YAML.ByteOrderMarkToken,
+                             YAML.DocumentEndToken, YAML.DirectiveToken})
+            state.directive_prologue_scanned = true
+            break
+        end
+    end
+    return nothing
+end
+
+function _next_unknown_directive!(state::_EventIteratorState)
+    directives = state.mark_converter.unknown_directives
+    _has_unknown_directive(state) || return nothing
+    event = directives[state.next_unknown_directive]
+    state.next_unknown_directive += 1
+    if state.next_unknown_directive > length(directives)
+        empty!(directives)
+        state.next_unknown_directive = 1
+    end
+    if state.unknown_directive_mode === :error
+        state.done = true
+        throw(ScannerError("while scanning a directive", event.start_mark,
+                           "found unknown directive \"$(event.name)\"",
+                           event.start_mark))
+    end
+    return event
+end
+
 function _forward!(state::_EventIteratorState)
     return _with_error_conversion(state) do
         YAML.forward!(state.stream)
@@ -53,6 +107,10 @@ end
 function Base.iterate(iterator::YAMLEventIterator, _ = nothing)
     state = iterator._state
     state.done && return nothing
+    _scan_directive_prologue!(state)
+    directive = _next_unknown_directive!(state)
+    directive === nothing || return directive, nothing
+
     event = _forward!(state)
     event === nothing && return nothing
 
@@ -60,8 +118,8 @@ function Base.iterate(iterator::YAMLEventIterator, _ = nothing)
     # of its EventStream. Resume it while suppressing the artificial stream
     # boundary so this public iterator represents the complete YAML stream.
     if event isa YAML.StreamEndEvent &&
-       state.previous_event isa DocumentEndEvent &&
-       state.previous_event.explicit
+       state.previous_backend_event isa DocumentEndEvent &&
+       state.previous_backend_event.explicit
         event = _resume_after_explicit_document!(state)
     end
 
@@ -71,19 +129,26 @@ function Base.iterate(iterator::YAMLEventIterator, _ = nothing)
     end
 
     event = _convert_event(state, event)
-    state.previous_event = event
+    state.previous_backend_event = event
+    event isa DocumentEndEvent && (state.directive_prologue_scanned = false)
     state.done = event isa StreamEndEvent
     return event, nothing
 end
 
 """
-    parse_events(input::Union{AbstractString, IO}) -> YAMLEventIterator
+    parse_events(input::Union{AbstractString, IO}; unknown_directives=:event)
+        -> YAMLEventIterator
 
 Parse `input` into a forward-only stream of [`Event`](@ref) objects without
 constructing Julia values.
 
 YAMLEvents implements YAML 1.1 syntax. An explicit directive declaring a newer
 YAML version raises [`ParserError`](@ref) as the iterator advances.
+Unknown directives produce [`UnknownDirectiveEvent`](@ref) objects by default.
+Each event precedes its document-start event and retains the exact text after
+the directive name without producing a log message. Pass
+`unknown_directives=:error` to reject unknown directives with a
+[`ScannerError`](@ref) instead.
 
 The event stream preserves document boundaries, scalar styles, explicit tags,
 anchors, aliases, collection styles, and source marks. This is useful for tools
@@ -112,7 +177,13 @@ julia> first(event for event in events if event isa YAMLEvents.SequenceStartEven
 true
 ```
 """
-function _parse_events(input::_PreparedInput)
+function _unknown_directive_mode(mode)
+    mode in (:event, :error) ||
+        throw(ArgumentError("unknown_directives must be :event or :error"))
+    return mode
+end
+
+function _parse_events(input::_PreparedInput, unknown_directives::Symbol)
     pkgversion(YAML) == v"0.4.16" || error("YAMLEvents requires YAML.jl 0.4.16")
     _validate_source_characters(input)
     tokenstream = YAML.TokenStream(IOBuffer(input.source))
@@ -126,11 +197,19 @@ function _parse_events(input::_PreparedInput)
                                mapping_tokenstream, 0, UInt64[], UInt64[],
                                firstindex(input.source), 0,
                                Dict{NTuple{3, UInt64}, Tuple{UInt64, UInt64}}(),
-                               Dict{NTuple{3, UInt64}, Tuple{String, Mark}}(), false, false)
+                               Dict{NTuple{3, UInt64}, Tuple{String, Mark}}(),
+                               UnknownDirectiveEvent[], false, false)
     state = _EventIteratorState(tokenstream, YAML.EventStream(tokenstream), converter,
-                                input.encoding, nothing, false)
+                                input.encoding, unknown_directives, false, 1, nothing, false)
     return YAMLEventIterator(state)
 end
 
-parse_events(input::IO) = _parse_events(_prepare_input(input))
-parse_events(input::AbstractString) = _parse_events(_prepare_input(input))
+function parse_events(input::IO; unknown_directives = :event)
+    mode = _unknown_directive_mode(unknown_directives)
+    return _parse_events(_prepare_input(input), mode)
+end
+
+function parse_events(input::AbstractString; unknown_directives = :event)
+    mode = _unknown_directive_mode(unknown_directives)
+    return _parse_events(_prepare_input(input), mode)
+end

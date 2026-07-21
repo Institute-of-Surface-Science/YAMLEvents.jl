@@ -41,7 +41,8 @@ function _validation_converter(input::_PreparedInput)
                           input.character_count, nothing, nothing, 0, UInt64[], UInt64[],
                           firstindex(input.source), 0,
                           Dict{NTuple{3, UInt64}, Tuple{UInt64, UInt64}}(),
-                          Dict{NTuple{3, UInt64}, Tuple{String, Mark}}(), false, false)
+                          Dict{NTuple{3, UInt64}, Tuple{String, Mark}}(),
+                          UnknownDirectiveEvent[], false, false)
 end
 
 function _resolve_quoted_characters!(resolved::BitVector,
