@@ -10,7 +10,7 @@ authors:
     given-names: Sven
     affiliation: Institute of Surface Science, Helmholtz-Zentrum Hereon, Germany
     orcid: "https://orcid.org/0000-0001-6083-7038"
-version: 0.1.1
+version: 0.2.0
 doi: 10.5281/zenodo.21428697
 repository-code: "https://github.com/Institute-of-Surface-Science/YAMLEvents.jl"
 url: "https://doi.org/10.5281/zenodo.21428697"

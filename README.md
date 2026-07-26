@@ -67,6 +67,22 @@ An `IO` input is buffered when `parse_events` is called. This allows pipes and
 other non-seekable streams to be used and means the input may be closed before
 iteration starts. Each event iterator is forward-only and may be consumed once.
 
+Unknown directives are retained as events rather than written to the logging
+system:
+
+```julia
+events = collect(parse_events("%APPLICATION strict\n---\nvalue\n"))
+directive = only(event for event in events if event isa UnknownDirectiveEvent)
+directive.name    # "APPLICATION"
+directive.content # " strict"
+```
+
+Configuration loaders can reject them without installing a custom logger:
+
+```julia
+collect(parse_events(source; unknown_directives=:error)) # may raise ScannerError
+```
+
 ## Examples
 
 Runnable examples are available in [`examples/`](examples):
@@ -93,6 +109,7 @@ The remaining fields depend on the event type:
 | `StreamEndEvent` | — |
 | `DocumentStartEvent` | `explicit`, `version`, `tags` |
 | `DocumentEndEvent` | `explicit` |
+| `UnknownDirectiveEvent` | `name`, `content` |
 | `ScalarEvent` | `anchor`, `tag`, `implicit`, `value`, `style` |
 | `AliasEvent` | `anchor` |
 | `SequenceStartEvent` | `anchor`, `tag`, `implicit`, `flow_style` |
@@ -115,6 +132,9 @@ A `Mark` describes a position between characters in the input:
 
 An event's `start_mark` points to the beginning of its syntax and its
 `end_mark` normally points immediately after it.
+For `UnknownDirectiveEvent`, `start_mark` points at `%`, `end_mark` points
+immediately before the line break, and `content` is the exact untrimmed text
+between the directive name and that mark.
 
 ## Errors
 
@@ -127,6 +147,10 @@ Decoded input containing characters forbidden by YAML, including raw control
 characters or a misplaced byte-order mark, raises `ScannerError`. Characters
 whose invalidity can be established during input validation are reported while
 the iterator is created.
+
+Unknown directives are valid source events by default. With
+`unknown_directives=:error`, reaching one raises `ScannerError` during
+iteration.
 
 Other malformed decoded YAML raises only `ScannerError` when the text cannot be
 tokenized or `ParserError` when valid tokens cannot form a YAML document. YAML

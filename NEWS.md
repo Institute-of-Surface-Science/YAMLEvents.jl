@@ -1,5 +1,11 @@
 # YAMLEvents.jl release notes
 
+## Version 0.2.0
+
+- Preserve unknown directives as source-aware `UnknownDirectiveEvent` objects
+  without producing global log messages.
+- Add `unknown_directives=:error` for consumers that reject unknown directives.
+
 ## Version 0.1.1
 
 - Normalize overflowing YAML directive components and invalid Unicode escapes

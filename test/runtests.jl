@@ -1,4 +1,5 @@
 using Aqua
+using Logging
 using StringEncodings: encode
 using Test
 using YAMLEvents
