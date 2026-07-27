@@ -30,6 +30,15 @@ first: "value"
 second: [one, two]
 ...
 """
+const PERMISSIVE_POLICY = SyntaxPolicy()
+const STRICT_POLICY = SyntaxPolicy(document_count = 1,
+                                   allow_flow_collections = false,
+                                   allow_anchors = false,
+                                   allow_aliases = false,
+                                   allow_tags = false,
+                                   allow_unknown_directives = false,
+                                   allow_merge_keys = false,
+                                   allow_duplicate_keys = false)
 
 function collect_io_events(source)
     return collect(parse_events(IOBuffer(source)))
@@ -70,3 +79,8 @@ SUITE["collection"]["multiple documents string"] =
     @benchmarkable collect(parse_events($MULTI_DOCUMENT_SOURCE)) samples = 1_000 seconds = 1.0
 SUITE["collection"]["multiple documents IO"] =
     @benchmarkable collect_io_events($MULTI_DOCUMENT_SOURCE) samples = 1_000 seconds = 1.0
+
+SUITE["validation"]["permissive plain string"] =
+    @benchmarkable validate_events(parse_events($PLAIN_SOURCE); policy = $PERMISSIVE_POLICY) samples = 1_000 seconds = 1.0
+SUITE["validation"]["strict plain string"] =
+    @benchmarkable validate_events(parse_events($PLAIN_SOURCE); policy = $STRICT_POLICY) samples = 1_000 seconds = 1.0

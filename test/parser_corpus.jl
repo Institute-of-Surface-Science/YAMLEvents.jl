@@ -45,6 +45,8 @@ end
             path = joinpath(@__DIR__, "yaml", "$name.yaml")
             events = collect(parse_events(IOBuffer(read(path))))
             @test well_formed_event_stream(events)
+            @test validate_events(events).document_count ==
+                  count(event -> event isa DocumentStartEvent, events)
         end
     end
 end

@@ -5,6 +5,7 @@ using Test
 using YAMLEvents
 
 include("event_api.jl")
+include("syntax_policy.jl")
 include("parser_corpus.jl")
 
 @testset "Package quality" begin
