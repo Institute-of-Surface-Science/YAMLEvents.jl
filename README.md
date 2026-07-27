@@ -83,19 +83,93 @@ Configuration loaders can reject them without installing a custom logger:
 collect(parse_events(source; unknown_directives=:error)) # may raise ScannerError
 ```
 
+## Syntax policies
+
+`validate_events` applies optional configuration-oriented restrictions while it
+consumes an event iterator. Parsing remains lossless and permissive; policies
+are a separate, opt-in layer and never construct YAML values:
+
+```julia
+policy = SyntaxPolicy(
+    document_count=1,
+    allow_flow_collections=false,
+    allow_anchors=false,
+    allow_aliases=false,
+    allow_tags=false,
+    allow_unknown_directives=false,
+    allow_merge_keys=false,
+    allow_duplicate_keys=false,
+)
+
+summary = validate_events(parse_events(source); policy)
+summary.document_count # 1
+```
+
+`SyntaxPolicy()` allows every syntax feature by default and does not constrain
+the number of documents:
+
+| Option | Default | Restriction when changed |
+| --- | --- | --- |
+| `document_count` | `nothing` | Require an exact non-negative document count |
+| `allow_flow_collections` | `true` | Reject `{...}` and `[...]` collections |
+| `allow_anchors` | `true` | Reject anchors on scalar and collection nodes |
+| `allow_aliases` | `true` | Reject alias nodes |
+| `allow_tags` | `true` | Reject explicit node tags and `%TAG` directives |
+| `allow_unknown_directives` | `true` | Reject `UnknownDirectiveEvent` objects |
+| `allow_merge_keys` | `true` | Reject plain or explicitly tagged merge keys |
+| `allow_duplicate_keys` | `true` | Reject repeated direct scalar keys per mapping |
+
+`allow_tags=false` does not reject YAML version directives, which remain
+governed by the parser.
+`allow_unknown_directives=false` rejects `UnknownDirectiveEvent` objects as
+policy failures. Passing `unknown_directives=:error` to `parse_events` instead
+continues to report them as `ScannerError`.
+
+Policy failures are distinct from parser failures:
+
+- `DisallowedSyntaxError` exposes the rejected `feature` and its `mark`;
+- `DuplicateKeyError` exposes `key`, the duplicate `mark`, and `first_mark`;
+- `DocumentCountError` exposes `expected`, `actual`, and the point where the
+  mismatch was established when one is available.
+
+All three are subtypes of `SyntaxPolicyError`, so an application can provide
+its own wording without inspecting formatted messages:
+
+```julia
+try
+    validate_events(parse_events(source); policy)
+catch error
+    if error isa DuplicateKeyError
+        println("Repeated key ", repr(error.key), " at ", error.mark)
+    elseif error isa SyntaxPolicyError
+        println("Configuration syntax is not allowed: ", sprint(showerror, error))
+    else
+        rethrow()
+    end
+end
+```
+
+Duplicate detection is intentionally event-level. It compares the decoded
+`value` of direct scalar keys within each mapping, so `key` and `"key"` are
+duplicates. It does not resolve scalar types, expand aliases, or compare
+collection keys. Validation consumes the iterator once and retains only the
+collection stack plus scalar keys in mappings that are currently open.
+
 ## Examples
 
 Runnable examples are available in [`examples/`](examples):
 
 - [`simplest.jl`](examples/simplest.jl) prints the events from a minimal mapping;
+- [`validate_syntax.jl`](examples/validate_syntax.jl) applies a strict syntax
+  policy and reports a duplicate key using its structured source marks;
 - [`compare_yaml_jl.jl`](examples/compare_yaml_jl.jl) implements the same
   syntax-aware query using YAML.jl's internal event stream and YAMLEvents.jl's
   iterator API, highlighting the simpler YAMLEvents.jl implementation.
 
-Run either example from the repository root with, for example:
+Run an example from the repository root with, for example:
 
 ```sh
-julia --project=. examples/simplest.jl
+julia --project=. examples/validate_syntax.jl
 ```
 
 ## Event model
@@ -170,6 +244,10 @@ catch error
     end
 end
 ```
+
+`validate_events` propagates parser failures unchanged. A syntax restriction or
+duplicate key reached first raises `SyntaxPolicyError` immediately; an exact
+document-count mismatch is reported after the stream has been consumed.
 
 ## Scope
 

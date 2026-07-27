@@ -21,6 +21,8 @@ export AliasEvent, ScalarEvent
 export SequenceStartEvent, SequenceEndEvent
 export MappingStartEvent, MappingEndEvent
 export EncodingError, ScannerError, ParserError
+export SyntaxPolicy, SyntaxValidationSummary, validate_events
+export SyntaxPolicyError, DisallowedSyntaxError, DuplicateKeyError, DocumentCountError
 
 include("mark.jl")
 include("events.jl")
@@ -30,5 +32,6 @@ include("mark_conversion.jl")
 include("source_validation.jl")
 include("event_conversion.jl")
 include("event_api.jl")
+include("syntax_policy.jl")
 
 end # module YAMLEvents

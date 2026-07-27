@@ -1,5 +1,14 @@
 # YAMLEvents.jl release notes
 
+## Version 0.2.1
+
+- Add `SyntaxPolicy` and `validate_events` for reusable streaming YAML syntax
+  validation without constructing YAML values.
+- Add source-aware policy errors for disallowed syntax, duplicate scalar keys,
+  and document-count mismatches.
+- Support opt-in restrictions for flow collections, anchors, aliases, tags,
+  unknown directives, merge keys, duplicate keys, and document counts.
+
 ## Version 0.2.0
 
 - Preserve unknown directives as source-aware `UnknownDirectiveEvent` objects
