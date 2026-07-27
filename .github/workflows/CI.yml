@@ -42,3 +42,39 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
 
       - uses: julia-actions/julia-runtest@v1
+
+  benchmark:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+
+    env:
+      JULIA_NUM_THREADS: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+          arch: x64
+
+      - uses: julia-actions/cache@v2
+
+      # PkgBenchmark checks out the baseline, which can predate benchmark/.
+      - name: Stage benchmark environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/yamlevents-benchmark"
+          cp benchmark/Project.toml benchmark/benchmarks.jl benchmark/runbenchmarks.jl "$RUNNER_TEMP/yamlevents-benchmark/"
+          julia --color=yes --project="$RUNNER_TEMP/yamlevents-benchmark" -e 'using Pkg; Pkg.develop(Pkg.PackageSpec(path=ENV["GITHUB_WORKSPACE"])); Pkg.instantiate(); Pkg.precompile()'
+
+      - name: Run benchmarks
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+        run: |
+          if [ -n "$BASE_SHA" ]; then
+            julia --color=yes --project="$RUNNER_TEMP/yamlevents-benchmark" "$RUNNER_TEMP/yamlevents-benchmark/runbenchmarks.jl" "$BASE_SHA"
+          else
+            julia --color=yes --project="$RUNNER_TEMP/yamlevents-benchmark" "$RUNNER_TEMP/yamlevents-benchmark/runbenchmarks.jl"
+          fi

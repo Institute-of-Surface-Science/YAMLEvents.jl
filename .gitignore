@@ -1,4 +1,6 @@
 /Manifest.toml
+/benchmark/Manifest.toml
+/benchmark/tune.json
 *.jl.cov
 *.jl.*.cov
 *.jl.mem
