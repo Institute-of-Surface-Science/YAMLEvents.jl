@@ -1,6 +1,6 @@
 # YAMLEvents.jl release notes
 
-## Version 0.3.0
+## Version 0.2.1
 
 - Add `SyntaxPolicy` and `validate_events` for reusable streaming YAML syntax
   validation without constructing YAML values.
