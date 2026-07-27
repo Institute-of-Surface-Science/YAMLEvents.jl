@@ -160,14 +160,16 @@ collection stack plus scalar keys in mappings that are currently open.
 Runnable examples are available in [`examples/`](examples):
 
 - [`simplest.jl`](examples/simplest.jl) prints the events from a minimal mapping;
+- [`validate_syntax.jl`](examples/validate_syntax.jl) applies a strict syntax
+  policy and reports a duplicate key using its structured source marks;
 - [`compare_yaml_jl.jl`](examples/compare_yaml_jl.jl) implements the same
   syntax-aware query using YAML.jl's internal event stream and YAMLEvents.jl's
   iterator API, highlighting the simpler YAMLEvents.jl implementation.
 
-Run either example from the repository root with, for example:
+Run an example from the repository root with, for example:
 
 ```sh
-julia --project=. examples/simplest.jl
+julia --project=. examples/validate_syntax.jl
 ```
 
 ## Event model
