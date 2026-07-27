@@ -73,8 +73,13 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
         run: |
-          if [ -n "$BASE_SHA" ]; then
+          if [ -n "$BASE_SHA" ] && git diff --quiet "$BASE_SHA" -- benchmark/Project.toml benchmark/benchmarks.jl; then
             julia --color=yes --project="$RUNNER_TEMP/yamlevents-benchmark" "$RUNNER_TEMP/yamlevents-benchmark/runbenchmarks.jl" "$BASE_SHA"
           else
+            if [ -n "$BASE_SHA" ]; then
+              echo "Benchmark definitions changed; running the current revision without a baseline."
+              echo "> Baseline comparison skipped because this pull request changes benchmark definitions." >> "$GITHUB_STEP_SUMMARY"
+              echo >> "$GITHUB_STEP_SUMMARY"
+            fi
             julia --color=yes --project="$RUNNER_TEMP/yamlevents-benchmark" "$RUNNER_TEMP/yamlevents-benchmark/runbenchmarks.jl"
           fi
