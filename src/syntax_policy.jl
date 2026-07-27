@@ -139,8 +139,8 @@ function _complete_syntax_node!(stack::Vector{_SyntaxCollectionState})
 end
 
 function _is_merge_key(event::ScalarEvent)
-    return event.style === nothing && event.value == "<<" ||
-           event.tag == "tag:yaml.org,2002:merge"
+    return event.tag == "tag:yaml.org,2002:merge" ||
+           (event.tag === nothing && event.style === nothing && event.value == "<<")
 end
 
 function _validate_mapping_key!(mapping::_SyntaxMappingState, event::ScalarEvent,

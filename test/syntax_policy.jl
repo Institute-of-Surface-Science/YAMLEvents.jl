@@ -204,6 +204,8 @@ end
         end
 
         @test captured_policy_error("\"<<\": value\n"; policy) === nothing
+        @test captured_policy_error("!!str <<: value\n"; policy) === nothing
+        @test captured_policy_error("!literal <<: value\n"; policy) === nothing
         @test captured_policy_error("key: <<\n"; policy) === nothing
         @test captured_policy_error("- <<\n"; policy) === nothing
 

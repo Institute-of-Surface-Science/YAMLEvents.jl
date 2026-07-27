@@ -4,7 +4,8 @@ The suite measures iterator construction and complete event collection for small
 inputs, large plain mappings, quoted and escaped values with percent-encoded
 tags, and multi-document streams with unknown directives. The sources are
 generated deterministically and are validated through both `String` and `IO`
-inputs before benchmarks run.
+inputs before benchmarks run. Permissive and strict streaming validation are
+also measured for the large plain mapping.
 
 From the repository root, initialize the isolated benchmark environment:
 
